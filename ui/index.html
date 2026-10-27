@@ -75,6 +75,14 @@
       <sl-dropdown id="more-menu" placement="bottom-end" distance="6" hoist>
         <button slot="trigger" class="tb-btn tb-more" type="button" aria-label="More actions"><sl-icon name="three-dots"></sl-icon></button>
         <sl-menu>
+          <div id="window-menu-items">
+            <sl-menu-label>Time window</sl-menu-label>
+            <sl-menu-item type="checkbox" data-window="15">15 seconds</sl-menu-item>
+            <sl-menu-item type="checkbox" data-window="30" checked>30 seconds</sl-menu-item>
+            <sl-menu-item type="checkbox" data-window="60">1 minute</sl-menu-item>
+            <sl-menu-item type="checkbox" data-window="180">3 minutes</sl-menu-item>
+            <sl-divider></sl-divider>
+          </div>
           <sl-menu-item id="menu-pause">Pause lanes<span slot="suffix" class="menu-key">P</span></sl-menu-item>
           <sl-menu-item id="menu-sample">Sample native threads</sl-menu-item>
           <sl-menu-item id="menu-run">Record run…</sl-menu-item>

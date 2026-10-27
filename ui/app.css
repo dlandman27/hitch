@@ -260,11 +260,11 @@ h2 {
 /* Title and status, like Xcode's "taild / Build Succeeded · 1:07 PM". */
 .tb-title {
   display: flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: 9px;
-  min-width: 150px;
+  min-width: 0;
   max-width: 260px;
-  flex-shrink: 0;
 }
 
 .brand-mark {
@@ -304,12 +304,24 @@ h2 {
 .conn-state[data-state='server-down'] { color: var(--sys-red); }
 
 /* The activity area: target capsule (app › device) and the findings count. */
+/* Shrinks before anything else; "safe" keeps it from spilling over its
+   neighbors when it no longer fits. */
 .tb-center {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;
   gap: 8px;
+  min-width: 0;
+}
+
+#target-menu {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#target-menu::part(trigger) {
+  display: flex;
   min-width: 0;
 }
 
@@ -337,6 +349,7 @@ sl-dropdown[open] .tb-capsule {
 
 .target-trigger {
   min-width: 0;
+  overflow: hidden;
 }
 
 .target-app {
@@ -506,8 +519,40 @@ sl-dropdown[open] .tb-capsule {
   color: var(--label-3);
 }
 
+/* The toolbar collapses like Xcode's: labels, then the time window (it moves
+   into •••), then the findings count, then the device name. */
+#window-menu-items {
+  display: none;
+}
+
 @media (max-width: 1100px) {
   .tb-btn-label {
+    display: none;
+  }
+}
+
+@media (max-width: 1080px) {
+  .tb-segmented {
+    display: none;
+  }
+
+  #window-menu-items {
+    display: contents;
+  }
+}
+
+@media (max-width: 820px) {
+  .tb-count,
+  .tb-center sl-tooltip:has(.tb-count) {
+    display: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .ta-sep,
+  .ta-device-icon,
+  .ta-device,
+  .brand-mark {
     display: none;
   }
 }
