@@ -113,6 +113,7 @@ export function startHub(opts) {
   hub.heapLabels = () => engine?.heapLabels?.() ?? [];
   hub.renders = (from, to) => engine?.renders?.(from, to) ?? null;
   hub.reactCommits = () => engine?.reactCommits?.() ?? [];
+  hub.responseBody = id => engine?.responseBody?.(id) ?? null;
   hub.profileWindow = (ms, reason) => engine?.profileWindow?.(ms, reason);
   hub.stopProfileWindow = () => engine?.stopProfileWindow?.();
   hub.stop = async () => {

@@ -55,6 +55,7 @@ export function startServer({ engine, port, onWindowsClosed }) {
 
   const withContext = event => {
     const recentLogs = logsBefore(event.at);
+    if (event.type === 'request') return { ...event, recentLogs, responseBody: engine.responseBody?.(event.id) ?? null };
     if (event.type !== 'stall') return { ...event, recentLogs };
     const key = event.culprits[0]?.key;
     const occurrences = key ? engine.history().stalls.filter(s => s.culprits[0]?.key === key).map(s => s.ms) : [event.ms];
@@ -116,6 +117,11 @@ export function startServer({ engine, port, onWindowsClosed }) {
       const seconds = Math.min(120, Number(url.searchParams.get('seconds')) || 60);
       const to = Date.now();
       return json(res, 200, { commits: engine.reactCommits?.() ?? [], summary: engine.renders?.(to - seconds * 1000, to) ?? null, avoidable: avoidableRows(engine.history().stalls ?? []), probe: engine.status().health?.probe ?? 'off' });
+    }
+
+    if (url.pathname === '/api/response') {
+      const body = engine.responseBody?.(Number(url.searchParams.get('id')));
+      return body ? json(res, 200, body) : json(res, 404, { error: 'No body kept for this request (only the last 150 are kept, and failed requests have none).' });
     }
 
     if (url.pathname === '/api/heap') {

@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { fingerprint } from './console-format.mjs';
+import { BODY_MAX, REQUEST_BODY_MAX, clip, createBodyStore, redactBody, redactHeaders } from './network-detail.mjs';
 
 const run = promisify(execFile);
 
@@ -172,6 +173,16 @@ export function createObservers({ publish, settings, nextId, symbolicate, getPid
   // ---------------------------------------------------------------- network
 
   const inflight = new Map();
+  // Response bodies of recent requests, read once each finishes.
+  const bodies = createBodyStore();
+  const readBody = async (requestId, eventId) => {
+    const raw = await getInspector()?.responseBody(requestId);
+    if (!raw) return null;
+    const text = raw.base64Encoded ? null : redactBody(raw.body);
+    const body = { ...(text != null ? clip(text, BODY_MAX) : { text: null, truncated: false, size: raw.body.length }), base64: raw.base64Encoded };
+    bodies.set(eventId, body);
+    return body;
+  };
   const onNetwork = (method, params) => {
     if (method === 'requestWillBeSent') {
       inflight.set(params.requestId, {
@@ -180,10 +191,12 @@ export function createObservers({ publish, settings, nextId, symbolicate, getPid
         startTs: params.timestamp,
         at: params.wallTime ? Math.round(params.wallTime * 1000) : params.timestamp ? Math.round(params.timestamp * 1000) : Date.now(),
         initiator: (params.initiator?.stack?.callFrames ?? []).slice(0, 20),
+        requestHeaders: redactHeaders(params.request?.headers),
+        requestBody: params.request?.postData ? clip(redactBody(params.request.postData), REQUEST_BODY_MAX) : null,
       });
     } else if (method === 'responseReceived') {
       const r = inflight.get(params.requestId);
-      if (r) Object.assign(r, { status: params.response?.status ?? null, mime: params.response?.mimeType ?? null });
+      if (r) Object.assign(r, { status: params.response?.status ?? null, mime: params.response?.mimeType ?? null, responseHeaders: redactHeaders(params.response?.headers) });
     } else if (method === 'loadingFinished' || method === 'loadingFailed') {
       const r = inflight.get(params.requestId);
       if (!r) return;
@@ -210,7 +223,16 @@ export function createObservers({ publish, settings, nextId, symbolicate, getPid
         canceled: Boolean(params.canceled),
         issue: !params.canceled && (failed || ms >= settings.slowRequestMs),
         source: null,
+        mime: r.mime ?? null,
+        requestHeaders: r.requestHeaders ?? null,
+        requestBody: r.requestBody ?? null,
+        responseHeaders: r.responseHeaders ?? null,
+        bodySize: null,
       };
+      if (method === 'loadingFinished') {
+        const body = await readBody(params.requestId, event.id).catch(() => null);
+        event.bodySize = body?.size ?? null;
+      }
       // Only flagged requests are worth symbolicating the initiator for.
       if (event.issue && r.initiator.length) {
         const frames = await symbolicate(r.initiator.map(f => ({ functionName: f.functionName, url: f.url, lineNumber: f.lineNumber, columnNumber: f.columnNumber })));
@@ -398,6 +420,7 @@ export function createObservers({ publish, settings, nextId, symbolicate, getPid
       vitalsTimer = null;
     },
     latestVitals: () => vitals.at(-1) ?? null,
+    responseBody: id => bodies.get(id),
     inStartup: () => Boolean(startup),
     history: () => ({ vitals: vitals.map(({ names, ...v }) => v), requests, console: consoleEvents, logs, startups }),
     clear: () => {
@@ -409,6 +432,7 @@ export function createObservers({ publish, settings, nextId, symbolicate, getPid
       requests.length = 0;
       consoleEvents.length = 0;
       startups.length = 0;
+      bodies.clear();
     },
   };
 }

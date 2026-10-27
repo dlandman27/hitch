@@ -96,7 +96,7 @@ The left panel has a view switcher next to the vitals:
 | **Timeline** | Thread lanes, network, console and memory over the last 15s–3m, with the screen the app was on along the top. **Drag across the lanes** to select a range: the lanes pause and the right side shows everything in that slice (freezes, what React rendered and why, busiest threads, requests, console, logs, memory), ready to send to Claude Code like any event. |
 | **Threads** | Every thread with its CPU now, on average and at peak, and a sparkline. |
 | **Console** | Every line the app logged, filterable by level and text. Click a warning or error to open it; click any other line to jump the timeline to that moment. |
-| **Network** | A waterfall of recent requests with status and time; slow and failed ones stand out. |
+| **Network** | A waterfall of recent requests with status and time; slow and failed ones stand out. Click one to see its response body (pretty-printed JSON) and headers, and the request's headers and body. Credentials (auth headers, cookies, API keys, app-check and signature headers, password and token fields) are always shown as hidden; bodies are kept in memory for the last 150 requests and never saved to session files. |
 | **Memory** | The whole session's JS heap, app memory and thread count, with launches, reloads, screens and leak alerts marked; plus heap snapshots and a comparison of what grew between two of them. |
 | **React** | Each commit's render time over the last two minutes, where render time went, and the session's avoidable re-renders. |
 | **Runs** | Recorded runs, each compared with the previous run of the same name. |
@@ -202,6 +202,7 @@ An agent working in your app's repo can then ask what Hitch saw and check its ow
 | `hitch_finding` | One finding in full: the same brief as **Copy prompt** |
 | `hitch_top_offenders` | The lines that blocked the JS thread longest across the session |
 | `hitch_logs` | The app's recent `console.log` / `info` / `debug` lines |
+| `hitch_requests` · `hitch_request` | Recent requests, and one in full: headers and bodies, credentials hidden |
 | `hitch_renders` | What React rendered in the last N seconds and why, plus the session's avoidable re-renders |
 | `hitch_profile` | Record the JS thread for N seconds with Hermes' profiler: hottest functions, and your own code by total time |
 | `hitch_heap_snapshot` · `hitch_heap_diff` | Snapshot the JS heap under a label, then see which kinds of objects grew between two snapshots |

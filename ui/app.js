@@ -1499,7 +1499,7 @@ function copyButton(node, value, label) {
   button.value = value;
   button.copyLabel = label;
   button.successLabel = 'Copied';
-  node.querySelector('h3').append(button);
+  (node.querySelector('h3') ?? node.closest('.d-section')?.querySelector('h3'))?.append(button);
 }
 
 function relatedSection(title, items) {
@@ -1574,19 +1574,81 @@ function renderConsoleDetail(root, c) {
   frameList(root, c.frames, 'Call stack');
 }
 
+// Pretty JSON when it parses; anything else as it came.
+const prettyText = text => {
+  const t = (text ?? '').trim();
+  if (!/^[[{]/.test(t)) return text ?? '';
+  try {
+    return JSON.stringify(JSON.parse(t), null, 2);
+  } catch {
+    return text;
+  }
+};
+
+const headersList = headers =>
+  headers && Object.keys(headers).length
+    ? `<dl class="kv headers">${Object.entries(headers)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, value]) => `<dt>${esc(name)}</dt><dd${value === '•••• hidden' ? ' class="hidden-value"' : ''}>${esc(value)}</dd>`)
+        .join('')}</dl>`
+    : '<p class="d-hint">No headers reported.</p>';
+
+function bodyBlock(node, text, note) {
+  const pretty = prettyText(text);
+  node.insertAdjacentHTML('beforeend', `${note ? `<p class="d-hint">${note}</p>` : ''}<pre class="body-pre">${esc(pretty)}</pre>`);
+  copyButton(node, pretty, 'Copy body');
+}
+
 function renderRequestDetail(root, r) {
   const slowMs = state.status?.settings?.slowRequestMs ?? 1000;
-  const verdict = r.failed ? (r.error ? `failed: ${esc(r.error)}` : `failed with HTTP ${r.status}`) : r.ms >= slowMs ? `took ${(r.ms / 1000).toFixed(1)}s, over your ${slowMs}ms threshold` : 'completed';
+  const verdict = r.failed ? (r.error ? `failed: ${esc(r.error)}` : `failed with HTTP ${r.status}`) : r.ms >= slowMs ? `took ${(r.ms / 1000).toFixed(1)}s, over your ${slowMs}ms threshold` : `took ${r.ms}ms`;
+  const kind = r.failed ? ['danger', 'Failed request'] : r.issue ? ['warning', 'Slow request'] : ['primary', 'Request'];
+  const size = r.bodySize ?? r.bytes;
   root.insertAdjacentHTML(
     'beforeend',
-    `${header(`<sl-badge variant="${r.failed ? 'danger' : 'warning'}">${r.failed ? 'Failed request' : 'Slow request'}</sl-badge>`, r.ms, 'ms', `${clock(r.at)} · ${ago(r.at)}`)}
-    <p class="d-summary">This <code>${esc(r.method)}</code> request ${verdict}. Anything waiting on it (a spinner, a list, a button) was stuck that long.</p>
+    `${header(`<sl-badge variant="${kind[0]}">${kind[1]}</sl-badge>`, r.ms, 'ms', `${clock(r.at)} · ${ago(r.at)}`)}
+    <p class="d-summary">This <code>${esc(r.method)}</code> request ${verdict}.${r.issue ? ' Anything waiting on it (a spinner, a list, a button) was stuck that long.' : ''}</p>
     <dl class="kv">
       <dt>URL</dt><dd>${esc(r.url)}</dd>
-      <dt>Status</dt><dd>${r.status ?? '—'}</dd>
-      <dt>Size</dt><dd>${r.bytes != null ? `${Math.round(r.bytes / 1024)} KB` : '—'}</dd>
+      <dt>Status</dt><dd>${esc(r.status ?? '—')}</dd>
+      <dt>Type</dt><dd>${esc(r.mime ?? '—')}</dd>
+      <dt>Size</dt><dd>${size != null ? (size >= 1024 ? `${(size / 1024).toFixed(1)} KB` : `${size} B`) : '—'}</dd>
     </dl>`,
   );
+
+  // Response first: it's usually what someone opens a request to see.
+  const response = section('Response', r.status ? `HTTP ${esc(r.status)}` : '');
+  response.insertAdjacentHTML('beforeend', '<div class="body-slot"><p class="d-hint">Loading the response body…</p></div>');
+  root.append(response);
+  const slot = response.querySelector('.body-slot');
+  const tooOld = r.requestHeaders === undefined;
+  fetch(`/api/response?id=${r.id}`)
+    .then(res => (res.headers.get('content-type')?.includes('json') ? res.json() : { error: 'old' }))
+    .catch(() => ({ error: 'old' }))
+    .then(body => {
+      slot.replaceChildren();
+      if (body.error === 'old' || tooOld) {
+        slot.innerHTML = '<sl-alert open variant="warning"><sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon><strong>Restart Hitch to see bodies and headers.</strong> The running Hitch doesn\'t capture them yet; quit and reopen Hitch.app, then repeat the request.</sl-alert>';
+        return;
+      }
+      if (body.error) slot.innerHTML = `<p class="d-hint">${esc(r.failed ? 'No body: the request failed.' : body.error)}</p>`;
+      else if (body.base64) slot.innerHTML = `<p class="d-hint">Binary body, ${body.size} bytes.</p>`;
+      else if (!body.text) slot.innerHTML = '<p class="d-hint">Empty body.</p>';
+      else bodyBlock(slot, body.text, body.truncated ? `Showing the first ${Math.round(body.text.length / 1024)} KB of ${Math.round(body.size / 1024)} KB.` : '');
+    });
+  const responseHeaders = el('details', 'headers-fold');
+  responseHeaders.innerHTML = `<summary>Response headers</summary>${headersList(r.responseHeaders)}`;
+  response.append(responseHeaders);
+
+  const request = section('Request', 'credentials hidden');
+  if (!tooOld) request.insertAdjacentHTML('beforeend', headersList(r.requestHeaders));
+  if (r.requestBody?.text) {
+    const bodyNode = el('div', 'request-body');
+    request.append(bodyNode);
+    bodyBlock(bodyNode, r.requestBody.text, r.requestBody.truncated ? `Showing the first ${Math.round(r.requestBody.text.length / 1024)} KB of ${Math.round(r.requestBody.size / 1024)} KB.` : 'Body');
+  }
+  root.append(request);
+
   if (r.source) codeCard(root, 'Requested from', r.source);
   const related = relatedSection('While it was in flight', relatedAround(r.at, r.at + r.ms, r.id));
   const requestLogs = logsSection(r.at - 2000, r.at + r.ms + 500);
@@ -1919,8 +1981,12 @@ async function showRange(from, to) {
   root.insertAdjacentHTML('beforeend', header('<sl-badge variant="primary">Selected range</sl-badge>', ((to - from) / 1000).toFixed(1), 'seconds', `${clock(from)}–${clock(to)}`));
   root.querySelector('.back').addEventListener('click', showList);
   $('#editor-btn').disabled = true;
-  const range = await fetch(`/api/range?from=${Math.round(from)}&to=${Math.round(to)}`).then(r => r.json()).catch(() => null);
-  if (!range || state.range?.from !== from) return;
+  const range = await fetch(`/api/range?from=${Math.round(from)}&to=${Math.round(to)}`).then(r => (r.ok ? r.json() : null)).catch(() => null);
+  if (state.range?.from !== from) return;
+  if (!range) {
+    root.insertAdjacentHTML('beforeend', '<sl-alert open variant="warning" style="margin-top:12px"><sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon><strong>Restart Hitch to see this range.</strong> The running Hitch is older than this page; quit and reopen Hitch.app.</sl-alert>');
+    return;
+  }
   renderRangeDetail(root, range);
 }
 
@@ -1979,6 +2045,7 @@ function setView(view) {
   state.view = view;
   for (const v of VIEWS) $(`#view-${v}`).hidden = v !== view;
   $('#view-select').value = view;
+  $('#view-select-compact').value = view;
   clearInterval(viewTimer);
   if (view === 'timeline') {
     layoutAt = 0;
@@ -1989,6 +2056,7 @@ function setView(view) {
   if (view !== 'runs') viewTimer = setInterval(() => viewRenderers[view](), view === 'react' ? 2000 : 1000);
 }
 $('#view-select').addEventListener('sl-change', e => setView(e.target.value));
+$('#view-select-compact').addEventListener('sl-change', e => setView(e.target.value));
 
 // Jumps the timeline to a moment (pausing it there), e.g. from a log line.
 function jumpTo(at) {
@@ -2110,7 +2178,7 @@ viewRenderers.network = () => {
           const left = ((r.at - start) / span) * 100;
           const width = (r.ms / span) * 100;
           const kind = r.failed ? 'failed' : r.ms >= slowMs ? 'slow' : '';
-          return `<div class="grow${r.issue ? ' clickable' : ''}" data-id="${r.issue ? r.id : ''}" title="${esc(r.method)} ${esc(r.url)}"><span class="mono">${esc(r.method)} ${esc(shortUrl(r.url))}</span>
+          return `<div class="grow clickable" data-id="${r.id}" title="${esc(r.method)} ${esc(r.url)}"><span class="mono">${esc(r.method)} ${esc(shortUrl(r.url))}</span>
             <span class="num">${r.failed ? esc(r.status ?? 'failed') : esc(r.status ?? '—')}</span><span class="num">${r.ms >= 1000 ? `${(r.ms / 1000).toFixed(1)}s` : `${r.ms}ms`}</span>
             <span class="wf"><b class="${kind}" style="left:${left.toFixed(2)}%;width:${Math.max(0.4, width).toFixed(2)}%"></b></span></div>`;
         })
@@ -2233,8 +2301,12 @@ function markLines(marks, x, H) {
 // React: commits over time, where render time went, and avoidable re-renders.
 viewRenderers.react = async () => {
   const view = $('#view-react');
-  const data = await fetch('/api/react?seconds=60').then(r => r.json()).catch(() => null);
-  if (state.view !== 'react' || !data) return;
+  const data = await fetch('/api/react?seconds=60').then(r => (r.ok ? r.json() : null)).catch(() => null);
+  if (state.view !== 'react') return;
+  if (!data) {
+    view.innerHTML = emptyView('Restart Hitch to use this view', 'This view needs data from a newer Hitch than the one running. Quit and reopen Hitch.app (or restart hitch in the terminal).');
+    return;
+  }
   if (data.probe !== 'on' && !data.commits.length) {
     view.innerHTML = emptyView('React probe not running', data.probe === 'no-hook' ? 'The app has no React DevTools hook (only dev builds have it).' : 'It starts when Hitch attaches to a dev build through Metro.');
     return;
@@ -2287,8 +2359,11 @@ viewRenderers.react = async () => {
 // Runs: recorded runs and how each compares with the previous of its name.
 viewRenderers.runs = async () => {
   const view = $('#view-runs');
-  const data = await fetch('/api/runs').then(r => r.json()).catch(() => null);
-  if (!data) return;
+  const data = await fetch('/api/runs').then(r => (r.ok ? r.json() : null)).catch(() => null);
+  if (!data) {
+    view.innerHTML = emptyView('Restart Hitch to use this view', 'Quit and reopen Hitch.app so its server has the runs data.');
+    return;
+  }
   if (!data.runs.length) {
     view.innerHTML = emptyView('No runs yet', 'Use Record in the toolbar around an interaction (open a screen, scroll). Runs with the same name are compared.');
     return;

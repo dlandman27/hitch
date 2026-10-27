@@ -142,6 +142,18 @@ const TOOLS = [
     annotations: READ_ONLY,
   },
   {
+    name: 'hitch_requests',
+    description: 'Recent network requests (all of them, not only slow or failed), newest last, with ids for hitch_request.',
+    inputSchema: { type: 'object', properties: { search: string('Text to match in the URL or method.'), limit: number('Most recent N (default 30).', { minimum: 1, maximum: LIMIT_MAX }) } },
+    annotations: READ_ONLY,
+  },
+  {
+    name: 'hitch_request',
+    description: 'One request in full: URL, status, timing, request headers and body, response headers, and the response body (credentials hidden; bodies kept for the last 150 requests).',
+    inputSchema: { type: 'object', properties: { id: number('Request id from hitch_requests or hitch_findings.'), max_body: number('Characters of response body to return (default 20000).', { minimum: 100, maximum: 250000 }) }, required: ['id'] },
+    annotations: READ_ONLY,
+  },
+  {
     name: 'hitch_renders',
     description: 'What React rendered in a time window, from the probe Hitch installs through the React DevTools hook: commits, render time, mounts, and per component how often it rendered and why (state, store, context, changed props, or new props with equal values = avoidable). Also the session-wide list of avoidable re-renders seen during freezes.',
     inputSchema: { type: 'object', properties: { since_seconds: number('Window: the last N seconds (default 30).', { minimum: 1, maximum: 120 }) } },
@@ -308,6 +320,36 @@ export function createMcp({ engine, findEvent, withContext, root, runs, scenario
         .slice(-capped(limit, 100, LIMIT_MAX));
       if (!logs.length) return text('No app logs matching yet.');
       return text(logs.map(l => `${clock(l.at)} console.${l.level}${l.count > 1 ? ` ×${l.count}` : ''}: ${l.text}`).join('\n'));
+    },
+
+    hitch_requests({ search, limit } = {}) {
+      const needle = search?.toLowerCase();
+      const list = (engine.history().requests ?? []).filter(r => !needle || `${r.method} ${r.url}`.toLowerCase().includes(needle)).slice(-capped(limit, 30, LIMIT_MAX));
+      if (!list.length) return text('No requests matching yet.');
+      return text(list.map(r => `#${r.id}  ${clock(r.at)}  ${r.method} ${r.url.slice(0, 160)}  ${r.failed ? `failed (${r.error ?? r.status})` : r.status}  ${ms(r.ms)}${r.bodySize != null ? `  ${Math.round(r.bodySize / 1024)} KB` : ''}`).join('\n'));
+    },
+
+    hitch_request({ id, max_body } = {}) {
+      const r = (engine.history().requests ?? []).find(q => q.id === Number(id));
+      if (!r) return failure(`No request #${id}. List them with hitch_requests.`);
+      const body = engine.responseBody?.(r.id);
+      const max = capped(max_body, 20000, 250000);
+      const headers = h => Object.entries(h ?? {}).map(([k, v]) => `${k}: ${v}`).join('\n') || '(none)';
+      return text(
+        [
+          `${r.method} ${r.url}`,
+          `status ${r.status ?? '—'}${r.failed ? ` · failed: ${r.error ?? ''}` : ''} · ${ms(r.ms)} · ${r.mime ?? 'unknown type'} · at ${clock(r.at)}${r.source?.file ? ` · from ${r.source.file}:${r.source.line}` : ''}`,
+          '',
+          'Request headers (credentials hidden):',
+          headers(r.requestHeaders),
+          ...(r.requestBody?.text ? ['', `Request body${r.requestBody.truncated ? ` (first ${r.requestBody.text.length} of ${r.requestBody.size})` : ''}:`, r.requestBody.text] : []),
+          '',
+          'Response headers:',
+          headers(r.responseHeaders),
+          '',
+          body?.text != null ? `Response body${body.text.length > max || body.truncated ? ` (first ${Math.min(max, body.text.length)} of ${body.size} characters)` : ''}:\n${body.text.slice(0, max)}` : body?.base64 ? `Response body: binary, ${body.size} bytes.` : 'Response body: not kept (failed, or older than the last 150 requests).',
+        ].join('\n'),
+      );
     },
 
     hitch_renders({ since_seconds } = {}) {

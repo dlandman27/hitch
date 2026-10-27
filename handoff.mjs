@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 
+import { prettyBody } from './network-detail.mjs';
 import { describeReason } from './react-probe.mjs';
 
 export function readSource(projectRoot, file, line, context) {
@@ -176,11 +177,28 @@ function consolePrompt(c, projectRoot) {
   ].join('\n');
 }
 
+// What the request sent and what came back, credentials already hidden.
+const BODY_PREVIEW = 2000;
+const headerLines = headers => Object.entries(headers ?? {}).map(([name, value]) => `${name}: ${value}`).join('\n');
+function exchangeBlock(r) {
+  const out = [];
+  if (r.requestHeaders && Object.keys(r.requestHeaders).length) out.push('', '## Request headers (credentials hidden)', fence('', headerLines(r.requestHeaders)));
+  if (r.requestBody?.text) out.push('', `## Request body${r.requestBody.truncated ? ` (first ${r.requestBody.text.length} of ${r.requestBody.size} characters)` : ''}`, fence('json', prettyBody(r.requestBody.text).slice(0, BODY_PREVIEW)));
+  if (r.responseHeaders && Object.keys(r.responseHeaders).length) out.push('', '## Response headers', fence('', headerLines(r.responseHeaders)));
+  const body = r.responseBody;
+  if (body?.text) {
+    const pretty = prettyBody(body.text);
+    out.push('', `## Response body${pretty.length > BODY_PREVIEW || body.truncated ? ` (first ${BODY_PREVIEW} of ${body.size} characters)` : ''}`, fence('json', pretty.slice(0, BODY_PREVIEW)));
+  } else if (body?.base64) out.push('', `Response body: binary, ${body.size} bytes (base64).`);
+  return out;
+}
+
 function requestPrompt(r, projectRoot) {
   return [
     `# Investigate: ${r.failed ? 'failed' : 'slow'} request ${r.method} ${r.url}`,
     '',
     `Hitch saw this request ${r.failed ? `fail (${r.error ?? `HTTP ${r.status}`})` : `take ${r.ms}ms`} while testing the app. Status: ${r.status ?? '—'}, size: ${r.bytes != null ? `${Math.round(r.bytes / 1024)} KB` : 'unknown'}.`,
+    ...exchangeBlock(r),
     ...codeBlock(projectRoot, r.source, 12),
     ...stackBlock(r.frames),
     '',

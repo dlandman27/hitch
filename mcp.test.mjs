@@ -46,7 +46,7 @@ test('initializes, lists tools and acknowledges notifications', async () => {
   assert.ok(init.json.result.capabilities.tools);
   assert.equal((await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202);
   const names = (await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).json.result.tools.map(t => t.name);
-  assert.deepEqual(names, ['hitch_status', 'hitch_findings', 'hitch_finding', 'hitch_top_offenders', 'hitch_logs', 'hitch_renders', 'hitch_profile', 'hitch_heap_snapshot', 'hitch_heap_diff', 'hitch_run_start', 'hitch_run_stop', 'hitch_run_scenario', 'hitch_runs', 'hitch_clear', 'hitch_reload_app', 'hitch_save_report']);
+  assert.deepEqual(names, ['hitch_status', 'hitch_findings', 'hitch_finding', 'hitch_top_offenders', 'hitch_logs', 'hitch_requests', 'hitch_request', 'hitch_renders', 'hitch_profile', 'hitch_heap_snapshot', 'hitch_heap_diff', 'hitch_run_start', 'hitch_run_stop', 'hitch_run_scenario', 'hitch_runs', 'hitch_clear', 'hitch_reload_app', 'hitch_save_report']);
   assert.equal((await rpc({ jsonrpc: '2.0', id: 3, method: 'nope' })).json.error.code, -32601);
 });
 

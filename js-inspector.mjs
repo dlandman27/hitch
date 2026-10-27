@@ -196,6 +196,12 @@ export function connectInspector({ metroUrl, target }) {
       ? Promise.race([send('Runtime.getHeapUsage', {}).then(r => r.result ?? null), new Promise(r => setTimeout(() => r(null), 1000))])
       : Promise.resolve(null);
 
+  // A finished request's response body, as the app's network agent kept it.
+  events.responseBody = requestId =>
+    ws.readyState === WebSocket.OPEN
+      ? Promise.race([send('Network.getResponseBody', { requestId }).then(r => r.result ?? null), new Promise(r => setTimeout(() => r(null), 3000))])
+      : Promise.resolve(null);
+
   // Runs an expression in the app and returns its JSON-able value (or null).
   events.evaluate = (expression, timeoutMs = 2000) =>
     ws.readyState === WebSocket.OPEN
