@@ -144,6 +144,7 @@ const state = {
   run: null,
   range: null,
   drag: null,
+  detailCopy: null,
   view: 'timeline',
   servers: [],
   current: null,
@@ -1320,6 +1321,7 @@ function renderDetail(event) {
     screen: renderScreenDetail,
   };
   $('#editor-btn').disabled = true;
+  setActions(null);
   headerType = event.type;
   renderers[event.type](root, event);
   root.querySelector('.back').addEventListener('click', showList);
@@ -1802,7 +1804,20 @@ async function openEditor(file, line) {
   toast(res.error ? `Couldn't open editor: ${res.error}` : `Opened ${file}:${line} in ${res.editor}`, res.error ? 'danger' : 'success');
 }
 
+// Pages that aren't a fix-it brief (a log line, a thread) copy their own text,
+// and there's nothing to hand to Claude Code.
+function setActions(copyText) {
+  state.detailCopy = copyText;
+  $('#handoff-btn').disabled = Boolean(copyText);
+  $('#copy-btn').innerHTML = `<sl-icon slot="prefix" name="clipboard"></sl-icon>${copyText ? 'Copy' : 'Copy prompt'}`;
+}
+
 $('#copy-btn').addEventListener('click', async () => {
+  if (state.detailCopy) {
+    await navigator.clipboard.writeText(state.detailCopy);
+    toast('Copied.', 'success');
+    return;
+  }
   const query = state.range ? `from=${Math.round(state.range.from)}&to=${Math.round(state.range.to)}` : `id=${state.selectedId}`;
   const res = await fetch(`/api/prompt?${query}`).then(r => r.json());
   await navigator.clipboard.writeText(res.prompt);
@@ -1978,6 +1993,7 @@ async function showRange(from, to) {
   const root = $('#detail');
   root.replaceChildren();
   headerType = null;
+  setActions(null);
   root.insertAdjacentHTML('beforeend', header('<sl-badge variant="primary">Selected range</sl-badge>', ((to - from) / 1000).toFixed(1), 'seconds', `${clock(from)}–${clock(to)}`));
   root.querySelector('.back').addEventListener('click', showList);
   $('#editor-btn').disabled = true;
@@ -2034,6 +2050,122 @@ function renderRangeDetail(root, r) {
 }
 
 const deltaMb = (a, b) => (a == null || b == null ? '' : `${b - a >= 0 ? '+' : '−'}${fmtMb(Math.abs(b - a))} in range`);
+
+// ---------------------------------------------------------------- log and thread pages
+
+// Opens the right side on a page that isn't a finding.
+function openPage() {
+  state.selectedId = null;
+  state.range = null;
+  renderEvents();
+  $('#list-panel').hidden = true;
+  $('#detail-panel').hidden = false;
+  $('#editor-btn').disabled = true;
+  const root = $('#detail');
+  root.replaceChildren();
+  root.scrollTop = 0;
+  headerType = null;
+  return root;
+}
+
+function showLog(id) {
+  const log = state.logs.find(l => l.id === id);
+  if (!log) return;
+  const root = openPage();
+  const level = log.level === 'info' ? 'primary' : 'neutral';
+  root.insertAdjacentHTML('beforeend', header(`<sl-badge variant="${level}">console.${esc(log.level)}</sl-badge>`, clock(log.at), log.count > 1 ? `×${log.count}` : '', `${ago(log.at)}${log.count > 1 ? ` · last at ${clock(log.lastAt)}` : ''}${state.status?.screen ? '' : ''}`));
+  root.querySelector('.back').addEventListener('click', showList);
+  const message = section('Message');
+  message.insertAdjacentHTML('beforeend', `<pre class="body-pre">${esc(prettyText(log.text))}</pre>`);
+  root.append(message);
+  if (log.lastText && log.lastText !== log.text) {
+    const latest = section('Latest repeat', 'the text changed between repeats');
+    latest.insertAdjacentHTML('beforeend', `<pre class="body-pre">${esc(prettyText(log.lastText))}</pre>`);
+    root.append(latest);
+  }
+  const jump = el('sl-button', '', '<sl-icon slot="prefix" name="bar-chart-steps"></sl-icon>Show on timeline');
+  jump.size = 'small';
+  jump.style.marginTop = '12px';
+  jump.addEventListener('click', () => jumpTo(log.at));
+  root.append(jump);
+  const around = relatedSection('Caught around it', relatedAround(log.at - 5000, log.at + 5000, null));
+  if (around) root.append(around);
+  const logs = logsSection(log.at - 5000, log.at + 5000);
+  if (logs) root.append(logs);
+  setActions(log.lastText && log.lastText !== log.text ? `${log.text}\n\nLatest repeat:\n${log.lastText}` : log.text);
+}
+
+function showThread(name) {
+  const lane = state.lanes.get(name);
+  if (!lane) return;
+  const root = openPage();
+  const now = Date.now();
+  const pct = v => `${Math.round(v * 100)}%`;
+  const avg = busyBetween(lane, now - state.windowSec * 1000, now);
+  const peak = Math.max(0, ...lane.points.map(p => p[2]));
+  root.insertAdjacentHTML('beforeend', header('<sl-badge variant="neutral">Thread</sl-badge>', pct(busyBetween(lane, now - 1000, now)), 'busy now', esc(shortThreadName(name))));
+  root.querySelector('.back').addEventListener('click', showList);
+  root.insertAdjacentHTML('beforeend', `<p class="d-summary">${esc(threadInfo(name))}</p>`);
+
+  // CPU over the history the window keeps (about 3 minutes).
+  const t0 = lane.points[0]?.[0] ?? now;
+  const BUCKETS = 120;
+  const span = Math.max(1, now - t0);
+  const buckets = Array.from({ length: BUCKETS }, () => [0, 0]);
+  for (const [at, , busy] of lane.points) {
+    const b = Math.min(BUCKETS - 1, Math.floor(((at - t0) / span) * BUCKETS));
+    buckets[b][0] += busy;
+    buckets[b][1] += 1;
+  }
+  const values = buckets.map(([sum, n]) => (n ? sum / n : 0));
+  const chart = section('CPU', `${clock(t0)} – now`);
+  chart.insertAdjacentHTML(
+    'beforeend',
+    `<div class="chart-card">${sparkline(values, lane.color, 480, 90).replace('class="spark"', 'class="spark spark-big"')}</div>
+    <div class="stat-row">
+      <div class="stat"><div class="k">Now</div><div class="v">${pct(busyBetween(lane, now - 1000, now))}</div></div>
+      <div class="stat"><div class="k">Average, last ${state.windowSec}s</div><div class="v">${pct(avg)}</div></div>
+      <div class="stat"><div class="k">Peak</div><div class="v">${pct(peak)}</div></div>
+    </div>`,
+  );
+  root.append(chart);
+
+  // Native samples where this thread was busy: its hottest functions.
+  const short = shortThreadName(name);
+  const samples = state.hot
+    .map(h => ({ h, t: h.threads.find(t => t.label === name || shortThreadName(t.label) === short) }))
+    .filter(x => x.t)
+    .slice(-3)
+    .reverse();
+  if (samples.length) {
+    const node = section('Native samples', 'when it was busy');
+    for (const { h, t } of samples) {
+      const card = el('sl-card', 'thread-card');
+      card.innerHTML = `<div class="tc-body">
+        <div class="tc-head"><span class="tc-name">${clock(h.at)} · ${esc(h.trigger)}</span><span class="tc-pct">${t.busyPct}%</span></div>
+        <div class="stackbar">${t.categories.map(c => `<i style="width:${c.pct}%;background:${CATEGORY_COLORS[c.name] ?? COLORS.other}"></i>`).join('')}</div>
+        <div class="cats">${t.categories.slice(0, 4).map(c => `<span><i style="background:${CATEGORY_COLORS[c.name] ?? COLORS.other}"></i>${esc(c.name)} ${c.pct}%</span>`).join('')}</div>
+        <ul class="frames">${t.frames.map(f => `<li><span class="fm">${f.ms}ms</span><span class="fn" title="${esc(f.name)}">${esc(f.name)} <span class="lib">${esc(f.lib ?? '')}</span></span></li>`).join('')}</ul>
+      </div>`;
+      card.addEventListener('click', () => select(h.id));
+      node.append(card);
+    }
+    root.append(node);
+  } else {
+    root.insertAdjacentHTML('beforeend', '<p class="d-hint" style="margin-top:14px">No native samples of this thread yet. Hitch samples every thread when one runs hot, or when you press Sample in the toolbar.</p>');
+  }
+
+  // Freezes during which this thread was mostly busy too.
+  const busyFreezes = state.stalls.filter(st => name === 'JS thread' || busyBetween(lane, st.at, st.at + st.ms) > 0.5).slice(-10).reverse();
+  const freezes = relatedSection('Freezes while it was busy', busyFreezes);
+  if (freezes) root.append(freezes);
+  setActions(`${short}: ${pct(busyBetween(lane, now - 1000, now))} now, ${pct(avg)} average over ${state.windowSec}s, ${pct(peak)} peak.\n${threadInfo(name)}`);
+}
+
+$('#view-threads').addEventListener('click', e => {
+  const row = e.target.closest('.grow[data-thread]');
+  if (row) showThread(row.dataset.thread);
+});
 
 // ---------------------------------------------------------------- views
 
@@ -2113,7 +2245,7 @@ viewRenderers.threads = () => {
       <div class="grow ghead"><span>Thread</span><span class="num">Now</span><span class="num">Avg</span><span class="num">Peak</span><span>Last ${state.windowSec}s</span></div>
       ${active
         .map(
-          r => `<div class="grow" title="${esc(threadInfo(r.lane.name))}"><span class="name"><i style="background:${r.lane.color}"></i>${esc(shortThreadName(r.lane.name))}</span>
+          r => `<div class="grow clickable" data-thread="${esc(r.lane.name)}" title="${esc(threadInfo(r.lane.name))}"><span class="name"><i style="background:${r.lane.color}"></i>${esc(shortThreadName(r.lane.name))}</span>
           <span class="num">${pct(r.now)}</span><span class="num">${pct(r.avg)}</span><span class="num">${pct(r.peak)}</span>${sparkline(r.buckets, r.lane.color)}</div>`,
         )
         .join('')}
@@ -2160,7 +2292,7 @@ $('#console-list').addEventListener('click', e => {
   const row = e.target.closest('.grow[data-at]');
   if (!row) return;
   if (row.dataset.finding) select(Number(row.dataset.id));
-  else jumpTo(Number(row.dataset.at));
+  else showLog(Number(row.dataset.id));
 });
 
 // Network: a waterfall of recent requests.

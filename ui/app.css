@@ -2352,3 +2352,11 @@ sl-tooltip::part(body) {
   font-size: 12.5px;
   cursor: default;
 }
+
+.spark-big {
+  height: 90px;
+}
+
+.detail .thread-card {
+  cursor: default;
+}
