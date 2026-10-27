@@ -306,7 +306,12 @@ function setStatus(status) {
   $('#conn').dataset.state = status.state;
   $('#conn-state').textContent = STATE_LABEL[status.state] ?? status.state;
   $('#conn-dot').dataset.state = status.state;
-  $('#conn-app').textContent = status.appId ? `${status.appId}${status.device ? ` · ${status.device}` : ''}${status.screen ? ` · ${status.screen}` : ''}` : '';
+  // Like Xcode's scheme › destination: app, then where it runs.
+  $('#conn-app').innerHTML = status.appId
+    ? `<span class="ta-app">${esc(status.appId)}</span>${status.device ? `<sl-icon name="chevron-right" class="ta-sep"></sl-icon><sl-icon name="${status.physical ? 'phone' : 'phone-landscape'}" class="ta-device-icon"></sl-icon><span class="ta-device">${esc(status.device)}</span>` : ''}`
+    : 'No app yet';
+  const since = status.startedAt ? new Date(status.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null;
+  $('#tb-detail').textContent = status.screen ? ` · on ${status.screen}` : since && status.state !== 'replay' ? ` · since ${since}` : '';
   const mismatch = status.health?.symbols === 'mismatch';
   $('#map-alert').hidden = !mismatch;
   $('#map-alert').open = mismatch;
@@ -317,7 +322,8 @@ function setStatus(status) {
     $('#set-thread').value = status.settings.threadHot;
     $('#set-slow').value = status.settings.slowRequestMs ?? 1000;
   }
-  for (const id of ['#pause-btn', '#sample-btn', '#reset-btn']) $(id).closest('sl-tooltip').hidden = status.state === 'replay';
+  // A saved session can't be paused, sampled, recorded or reset.
+  $('#topbar').classList.toggle('replay', status.state === 'replay');
   $('#stale-alert').hidden = !status.bundleStale;
   $('#stale-alert').open = Boolean(status.bundleStale);
   const empty = $('#lanes-empty');
@@ -1001,6 +1007,9 @@ function renderEvents() {
   const list = $('#events');
   const events = allEvents();
   $('#event-count').textContent = events.length;
+  const total = capturedEvents().length;
+  $('#issue-count').hidden = total === 0;
+  $('#issue-count span').textContent = total;
   const filtered = state.filter !== 'all' || state.search.trim();
   $('#events-empty').hidden = events.length > 0 || filtered;
   $('#events-nomatch').hidden = events.length > 0 || !filtered;
@@ -1206,7 +1215,7 @@ function renderDetail(event) {
 let headerType = null;
 function header(kindBadge, number, unit, time) {
   return `<div class="d-top">
-      <sl-button class="back" size="small" variant="text"><sl-icon slot="prefix" name="arrow-left"></sl-icon>All events</sl-button>
+      <sl-button class="back" size="small" variant="text"><sl-icon slot="prefix" name="chevron-left"></sl-icon>Events</sl-button>
       <div class="spacer"></div>${kindBadge}${EVENT_INFO[headerType] ? info(EVENT_INFO[headerType]) : ''}
     </div>
     <div class="d-big"><span class="num">${number}</span><span class="unit">${unit}</span></div>
@@ -1640,10 +1649,12 @@ function togglePause() {
   state.paused = !state.paused;
   state.pausedAt = Date.now();
   const button = $('#pause-btn');
-  button.variant = state.paused ? 'warning' : 'text';
+  button.classList.toggle('active', state.paused);
   $('.topbar').classList.toggle('paused', state.paused);
   button.querySelector('sl-icon').name = state.paused ? 'play-fill' : 'pause-fill';
-  button.querySelector('span').textContent = state.paused ? 'Resume' : 'Pause';
+  button.setAttribute('aria-label', state.paused ? 'Resume the lanes' : 'Pause the lanes');
+  button.closest('sl-tooltip').content = state.paused ? 'Resume the lanes (P)' : 'Pause the lanes (P)';
+  $('#menu-pause').firstChild.textContent = state.paused ? 'Resume lanes' : 'Pause lanes';
 }
 
 $('#sample-btn').addEventListener('click', async () => {
@@ -1667,6 +1678,18 @@ $('#search').addEventListener('sl-input', e => {
 });
 
 $('#settings-btn').addEventListener('click', () => $('#settings').show());
+$('#menu-pause').addEventListener('click', togglePause);
+$('#menu-sample').addEventListener('click', () => $('#sample-btn').click());
+$('#menu-run').addEventListener('click', () => $('#run-btn').click());
+$('#menu-report').addEventListener('click', async () => {
+  const res = await post('/api/report');
+  toast(res.file ? `Report saved to ${res.file}` : "Couldn't save the report", res.file ? 'success' : 'danger');
+});
+$('#issue-count').addEventListener('click', () => {
+  state.filter = 'all';
+  $('#filter').value = 'all';
+  showList();
+});
 for (const [id, key] of [['#set-stall', 'stallMs'], ['#set-ui', 'uiHot'], ['#set-thread', 'threadHot'], ['#set-slow', 'slowRequestMs']]) {
   $(id).addEventListener('sl-change', e => post('/api/settings', { [key]: Number(e.target.value) }).then(() => toast('Threshold updated', 'success')));
 }
@@ -1679,9 +1702,11 @@ $('#report-btn').addEventListener('click', async () => {
 function setRun(active) {
   state.run = active;
   const btn = $('#run-btn');
-  btn.querySelector('span').textContent = active ? `Stop "${active.name}"` : 'Record run';
-  btn.querySelector('sl-icon').name = active ? 'stop-circle-fill' : 'record-circle';
-  btn.variant = active ? 'danger' : 'text';
+  btn.querySelector('.tb-btn-label').textContent = active ? `Stop “${active.name}”` : 'Record';
+  btn.querySelector('sl-icon').name = active ? 'stop-fill' : 'record-circle';
+  btn.classList.toggle('recording', Boolean(active));
+  btn.setAttribute('aria-label', active ? `Stop recording ${active.name}` : 'Record run');
+  $('#menu-run').firstChild.textContent = active ? `Stop “${active.name}”` : 'Record run…';
 }
 
 function showRunResult({ run, previous, comparison }) {
@@ -1705,9 +1730,9 @@ function showRunResult({ run, previous, comparison }) {
 $('#run-dialog-close').addEventListener('click', () => $('#run-dialog').hide());
 $('#run-btn').addEventListener('click', async () => {
   if (state.run) {
-    $('#run-btn').loading = true;
+    $('#run-btn').disabled = true;
     const res = await post('/api/run/stop', {});
-    $('#run-btn').loading = false;
+    $('#run-btn').disabled = false;
     if (res.error) toast(res.error, 'danger');
     return;
   }

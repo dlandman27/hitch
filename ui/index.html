@@ -12,62 +12,73 @@
     <!-- Shoelace design system (https://shoelace.style) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/themes/dark.css" />
     <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/shoelace-autoloader.js"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=JetBrains+Mono:wght@400;500;600&display=swap" />
     <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="brand" title="Hitch: live slowdown watcher">
-        <img class="brand-mark" src="/brand/hitch-mark.svg" alt="" />
-        <span class="wordmark">hitch</span>
+    <header class="topbar" id="topbar">
+      <!-- Room for the window's traffic lights when Hitch.app draws this bar in its title bar. -->
+      <div class="tb-lights" aria-hidden="true"></div>
+
+      <div class="tb-group" role="group" aria-label="Lanes">
+        <sl-tooltip content="Pause the lanes (P)">
+          <button class="tb-btn" id="pause-btn" type="button" aria-label="Pause the lanes"><sl-icon name="pause-fill"></sl-icon></button>
+        </sl-tooltip>
+        <span class="tb-sep" aria-hidden="true"></span>
+        <sl-tooltip content="Sample every native thread for 1 second">
+          <button class="tb-btn" id="sample-btn" type="button" aria-label="Sample native threads"><sl-icon name="cpu"></sl-icon></button>
+        </sl-tooltip>
       </div>
 
-      <span class="topbar-rule" aria-hidden="true"></span>
+      <div class="tb-title" title="Hitch: live slowdown watcher">
+        <img class="brand-mark" src="/brand/hitch-mark.svg" alt="" />
+        <div class="tb-title-text">
+          <span class="tb-name" id="target-project">Looking for Metro…</span>
+          <span class="tb-sub"><span class="conn-state" id="conn"><span id="conn-state">Connecting…</span></span><span id="tb-detail"></span></span>
+        </div>
+      </div>
 
-      <sl-dropdown id="target-menu" distance="8" hoist>
-        <button slot="trigger" class="target-trigger" type="button">
-          <span class="conn-dot" id="conn-dot"></span>
-          <span class="target-text">
-            <span class="target-project" id="target-project">Looking for Metro…</span>
-            <span class="target-sub">
-              <span class="conn-state" id="conn"><span id="conn-state">Connecting…</span></span>
-              <span class="target-app" id="conn-app"></span>
-            </span>
-          </span>
-          <sl-icon name="chevron-expand" class="target-caret"></sl-icon>
-        </button>
-        <sl-menu id="target-list"></sl-menu>
-      </sl-dropdown>
+      <div class="tb-center">
+        <sl-dropdown id="target-menu" distance="6" hoist>
+          <button slot="trigger" class="tb-capsule target-trigger" type="button" aria-label="Choose the app to watch">
+            <span class="conn-dot" id="conn-dot"></span>
+            <span class="target-app" id="conn-app">No app yet</span>
+            <sl-icon name="chevron-expand" class="target-caret"></sl-icon>
+          </button>
+          <sl-menu id="target-list"></sl-menu>
+        </sl-dropdown>
+        <sl-tooltip content="Findings captured so far">
+          <button class="tb-capsule tb-count" id="issue-count" type="button" hidden><sl-icon name="exclamation-triangle-fill"></sl-icon><span>0</span></button>
+        </sl-tooltip>
+      </div>
 
       <div class="vitals" id="vitals"></div>
 
-      <div class="toolbar">
-        <sl-radio-group id="window-select" size="small" value="30" label="Time window">
-          <sl-radio-button value="15">15s</sl-radio-button>
-          <sl-radio-button value="30">30s</sl-radio-button>
-          <sl-radio-button value="60">1m</sl-radio-button>
-          <sl-radio-button value="180">3m</sl-radio-button>
-        </sl-radio-group>
-        <div class="tool-group">
-          <sl-tooltip content="Freeze the lanes (P)">
-            <sl-button id="pause-btn" size="small" variant="text"><sl-icon slot="prefix" name="pause-fill"></sl-icon><span>Pause</span></sl-button>
-          </sl-tooltip>
-          <sl-tooltip content="Sample every native thread for 1 second">
-            <sl-button id="sample-btn" size="small" variant="text"><sl-icon slot="prefix" name="cpu"></sl-icon>Sample</sl-button>
-          </sl-tooltip>
-          <sl-tooltip content="Record a named run of an interaction (open a screen, scroll). When you stop, Hitch saves its numbers and compares them with the last run of the same name." id="run-tip">
-            <sl-button id="run-btn" size="small" variant="text"><sl-icon slot="prefix" name="record-circle"></sl-icon><span>Record run</span></sl-button>
-          </sl-tooltip>
-          <sl-tooltip content="Clear everything shown: events, thread lanes, memory, network and console. Hitch keeps watching.">
-            <sl-button id="reset-btn" size="small" variant="text"><sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon>Reset</sl-button>
-          </sl-tooltip>
-        </div>
-        <sl-tooltip content="Settings">
-          <sl-icon-button id="settings-btn" name="sliders2" label="Settings"></sl-icon-button>
+      <sl-radio-group id="window-select" class="tb-segmented" size="small" value="30" label="Time window">
+        <sl-radio-button value="15">15s</sl-radio-button>
+        <sl-radio-button value="30">30s</sl-radio-button>
+        <sl-radio-button value="60">1m</sl-radio-button>
+        <sl-radio-button value="180">3m</sl-radio-button>
+      </sl-radio-group>
+
+      <div class="tb-group" role="group" aria-label="Runs">
+        <sl-tooltip content="Record a named run of an interaction. When you stop, Hitch compares it with the last run of the same name." id="run-tip">
+          <button class="tb-btn" id="run-btn" type="button" aria-label="Record run"><sl-icon name="record-circle"></sl-icon><span class="tb-btn-label">Record</span></button>
         </sl-tooltip>
       </div>
+
+      <sl-dropdown id="more-menu" placement="bottom-end" distance="6" hoist>
+        <button slot="trigger" class="tb-btn tb-more" type="button" aria-label="More actions"><sl-icon name="three-dots"></sl-icon></button>
+        <sl-menu>
+          <sl-menu-item id="menu-pause">Pause lanes<span slot="suffix" class="menu-key">P</span></sl-menu-item>
+          <sl-menu-item id="menu-sample">Sample native threads</sl-menu-item>
+          <sl-menu-item id="menu-run">Record run…</sl-menu-item>
+          <sl-divider></sl-divider>
+          <sl-menu-item id="menu-report">Save report</sl-menu-item>
+          <sl-menu-item id="reset-btn">Reset<span slot="suffix" class="menu-hint">clears what's shown</span></sl-menu-item>
+          <sl-divider></sl-divider>
+          <sl-menu-item id="settings-btn">Settings…</sl-menu-item>
+        </sl-menu>
+      </sl-dropdown>
     </header>
 
     <sl-split-panel id="split" position="66" class="layout">

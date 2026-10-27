@@ -1,18 +1,97 @@
 /* Layout and the custom lane chart only; components come from Shoelace. */
 
 :root {
-  --lane-js: var(--sl-color-lime-400);
-  --lane-ui: var(--sl-color-sky-400);
-  --lane-gc: var(--sl-color-violet-400);
-  --lane-sdk: var(--sl-color-orange-400);
-  --lane-net: var(--sl-color-teal-400);
-  --lane-other: var(--sl-color-neutral-500);
-  --freeze: var(--sl-color-amber-400);
-  --freeze-severe: var(--sl-color-red-500);
-  --sampled: var(--sl-color-pink-400);
-  --surface: var(--sl-color-neutral-50);
-  --surface-raised: var(--sl-panel-background-color);
-  --border: var(--sl-panel-border-color);
+  /* macOS / iOS dark system colors. Lanes and severities use the same
+     system palette, so the window reads like a native Apple tool. */
+  --sys-blue: #0a84ff;
+  --sys-green: #30d158;
+  --sys-yellow: #ffd60a;
+  --sys-orange: #ff9f0a;
+  --sys-red: #ff453a;
+  --sys-pink: #ff375f;
+  --sys-purple: #bf5af2;
+  --sys-indigo: #5e5ce6;
+  --sys-teal: #40c8e0;
+  --sys-gray: #8e8e93;
+  --label: #ffffff;
+  --label-2: rgb(235 235 245 / 0.6);
+  --label-3: rgb(235 235 245 / 0.3);
+  --fill: rgb(120 120 128 / 0.24);
+  --fill-2: rgb(120 120 128 / 0.32);
+  --separator: rgb(84 84 88 / 0.6);
+  --bg: #1e1e1e;
+  --bg-grouped: #161617;
+  --cell: #2a2a2c;
+  --toolbar: #2c2c2e;
+  /* Hitch's primary color: solid fills with white text. Small text on the
+     dark background uses the lighter shade so it stays readable. */
+  --accent: #2463eb;
+  --accent-hover: #3b76f0;
+  --accent-pressed: #1d4fd8;
+  --accent-text: #6b9bf5;
+  --capsule: rgb(255 255 255 / 0.07);
+  --capsule-hover: rgb(255 255 255 / 0.12);
+
+  --lane-js: var(--sys-green);
+  --lane-ui: var(--sys-blue);
+  --lane-gc: var(--sys-purple);
+  --lane-sdk: var(--sys-orange);
+  --lane-net: var(--sys-teal);
+  --lane-other: var(--sys-gray);
+  --freeze: var(--sys-orange);
+  --freeze-severe: var(--sys-red);
+  --sampled: var(--sys-pink);
+  --surface: var(--cell);
+  --surface-raised: var(--cell);
+  --border: var(--separator);
+}
+
+/* Shoelace, retuned to San Francisco and the system palette. */
+:root,
+:root.sl-theme-dark {
+  --sl-font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  --sl-font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-rounded: ui-rounded, 'SF Pro Rounded', -apple-system, sans-serif;
+  --sl-color-primary-50: rgb(36 99 235 / 0.16);
+  --sl-color-primary-300: #93b4f8;
+  --sl-color-primary-400: #6b9bf5;
+  --sl-color-primary-500: #2463eb;
+  --sl-color-primary-600: #2463eb;
+  --sl-color-primary-700: #1d4fd8;
+  --sl-color-success-500: var(--sys-green);
+  --sl-color-success-600: var(--sys-green);
+  --sl-color-warning-500: var(--sys-orange);
+  --sl-color-warning-600: var(--sys-orange);
+  --sl-color-danger-500: var(--sys-red);
+  --sl-color-danger-600: var(--sys-red);
+  --sl-color-neutral-0: var(--bg);
+  --sl-color-neutral-50: #232325;
+  --sl-color-neutral-100: #2c2c2e;
+  --sl-color-neutral-200: #3a3a3c;
+  --sl-color-neutral-300: #48484a;
+  --sl-color-neutral-400: #636366;
+  --sl-color-neutral-500: #8e8e93;
+  --sl-color-neutral-600: #aeaeb2;
+  --sl-color-neutral-700: #c7c7cc;
+  --sl-color-neutral-800: #e5e5ea;
+  --sl-color-neutral-900: #f2f2f7;
+  --sl-color-neutral-1000: #ffffff;
+  --sl-panel-background-color: var(--cell);
+  --sl-panel-border-color: var(--separator);
+  --sl-input-background-color: var(--fill);
+  --sl-input-border-color: transparent;
+  --sl-input-border-radius-small: 7px;
+  --sl-input-border-radius-medium: 8px;
+  --sl-border-radius-medium: 10px;
+  --sl-border-radius-large: 12px;
+  --sl-focus-ring-color: rgb(36 99 235 / 0.7);
+  /* Tooltips: a light-on-dark popover that stands off the dark window. */
+  --sl-tooltip-background-color: #4a4a4e;
+  --sl-tooltip-color: #ffffff;
+  --sl-tooltip-border-radius: 7px;
+  --sl-tooltip-font-size: 12px;
+  --sl-tooltip-padding: 6px 9px;
+  --sl-letter-spacing-loose: 0;
 }
 
 [hidden] {
@@ -48,377 +127,378 @@ body:not(:has(:defined)) {
 
 h2 {
   margin: 0;
-  font-size: var(--sl-font-size-x-small);
-  font-weight: var(--sl-font-weight-semibold);
-  letter-spacing: var(--sl-letter-spacing-loose);
-  text-transform: uppercase;
-  color: var(--sl-color-neutral-600);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--label);
 }
 
 .spacer {
   flex: 1;
 }
 
-/* ---------- top bar ---------- */
+/* ---------- toolbar: a macOS unified toolbar, as in Xcode ---------- */
 
 .topbar {
-  --bar-h: 56px;
-  --accent-a: var(--lane-js);
-  --accent-b: var(--lane-ui);
   position: relative;
   z-index: 10;
   min-width: 0;
-  height: var(--bar-h);
-  display: flex;
-  align-items: center;
-  gap: var(--sl-spacing-medium);
-  padding: 0 var(--sl-spacing-medium) 0 var(--sl-spacing-large);
-  background:
-    radial-gradient(120% 220% at 0% 0%, color-mix(in srgb, var(--accent-a) 7%, transparent), transparent 45%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-raised) 92%, #fff 3%), var(--surface-raised));
-  box-shadow: 0 1px 0 var(--border), 0 8px 24px -16px rgb(0 0 0 / 0.8);
-}
-
-/* Hairline that lights up while live, dims when paused or disconnected. */
-.topbar::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--accent-a) 20%, var(--accent-b) 60%, transparent);
-  background-size: 200% 100%;
-  opacity: 0;
-  transition: opacity 0.6s ease;
-  pointer-events: none;
-}
-
-.topbar:has(#conn-dot[data-state='live'])::after {
-  opacity: 0.7;
-  animation: sweep 6s linear infinite;
-}
-
-.topbar.paused::after {
-  --accent-a: var(--freeze);
-  --accent-b: var(--freeze);
-  animation-play-state: paused;
-}
-
-@keyframes sweep {
-  to {
-    background-position: -200% 0;
-  }
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  flex-shrink: 0;
-  user-select: none;
-}
-
-.brand-mark {
-  width: 30px;
-  height: 30px;
-  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent-a) 30%, transparent));
-}
-
-.wordmark {
-  font-family: 'Bricolage Grotesque', var(--sl-font-sans);
-  font-size: 21px;
-  font-weight: 800;
-  font-variation-settings: 'opsz' 96;
-  letter-spacing: -0.045em;
-  line-height: 1;
-  background: linear-gradient(100deg, var(--sl-color-neutral-1000) 40%, var(--accent-a) 140%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-.topbar-rule {
-  flex-shrink: 0;
-  width: 1px;
-  height: 24px;
-  background: var(--border);
-}
-
-/* App picker: status, project and app/device in one control. */
-.target-trigger {
+  height: 52px;
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: 340px;
-  height: 40px;
-  padding: 0 10px 0 12px;
-  border: solid 1px var(--border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--sl-color-neutral-0) 55%, transparent);
-  color: inherit;
+  padding: 0 12px;
+  background: var(--toolbar);
+  border-bottom: 1px solid rgb(0 0 0 / 0.6);
+  box-shadow: inset 0 -1px 0 rgb(255 255 255 / 0.04);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Only Hitch.app draws the bar inside its title bar; leave room for the lights. */
+.tb-lights {
+  display: none;
+  flex: 0 0 64px;
+  height: 100%;
+}
+
+:root[data-shell='mac'] .tb-lights {
+  display: block;
+}
+
+:root[data-shell='mac'] .topbar {
+  padding-left: 14px;
+}
+
+/* Capsule groups of icon buttons, separated by hairlines (Xcode's ▶︎ ■). */
+.tb-group {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 2px;
+  border-radius: 8px;
+  background: var(--capsule);
+  flex-shrink: 0;
+}
+
+.tb-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--separator);
+}
+
+.tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  min-width: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--label-2);
   font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s, background-color 0.15s;
+  font-size: 13px;
+  cursor: default;
 }
 
-.target-trigger:hover,
-sl-dropdown[open] .target-trigger {
-  border-color: var(--sl-color-neutral-300);
-  background: var(--sl-color-neutral-50);
+.tb-btn sl-icon {
+  font-size: 15px;
 }
 
-.target-trigger:focus-visible {
-  outline: var(--sl-focus-ring);
-  outline-offset: 2px;
+.tb-btn:hover {
+  background: var(--capsule-hover);
+  color: var(--label);
 }
 
-.target-text {
+.tb-btn:focus-visible,
+.tb-capsule:focus-visible {
+  outline: 3px solid var(--sl-focus-ring-color);
+  outline-offset: 0;
+}
+
+.tb-btn:disabled {
+  opacity: 0.4;
+}
+
+.tb-btn.active {
+  color: var(--sys-orange);
+}
+
+.tb-btn-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+#run-btn.recording {
+  background: var(--accent);
+  color: #fff;
+}
+
+#run-btn.recording sl-icon {
+  animation: recording 1.4s ease-in-out infinite;
+}
+
+@keyframes recording {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.tb-more {
+  height: 30px;
+  min-width: 34px;
+  border-radius: 8px;
+  background: var(--capsule);
+  font-size: 17px;
+}
+
+/* Title and status, like Xcode's "taild / Build Succeeded · 1:07 PM". */
+.tb-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 150px;
+  max-width: 260px;
+  flex-shrink: 0;
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.tb-title-text {
   display: grid;
   min-width: 0;
   line-height: 1.2;
 }
 
-.target-project {
+.tb-name {
   overflow: hidden;
-  font-weight: var(--sl-font-weight-semibold);
-  color: var(--sl-color-neutral-1000);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--label);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.target-sub {
-  display: flex;
-  gap: 6px;
-  min-width: 0;
+.tb-sub {
+  overflow: hidden;
   font-size: 11px;
+  color: var(--label-2);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conn-state {
-  flex-shrink: 0;
-  font-weight: var(--sl-font-weight-semibold);
-  color: var(--sl-color-neutral-500);
+.conn-state[data-state='live'] { color: var(--sys-green); }
+.conn-state[data-state='replay'] { color: var(--accent-text); }
+.conn-state[data-state='disconnected'],
+.conn-state[data-state='connecting'] { color: var(--sys-orange); }
+.conn-state[data-state='no-server'],
+.conn-state[data-state='server-down'] { color: var(--sys-red); }
+
+/* The activity area: target capsule (app › device) and the findings count. */
+.tb-center {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
 }
 
-.conn-state[data-state='live'] { color: var(--sl-color-success-500); }
-.conn-state[data-state='replay'] { color: var(--sl-color-primary-500); }
-.conn-state[data-state='no-app'],
-.conn-state[data-state='disconnected'] { color: var(--sl-color-warning-500); }
-.conn-state[data-state='server-down'],
-.conn-state[data-state='no-server'] { color: var(--sl-color-danger-500); }
+.tb-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  max-width: 100%;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--capsule);
+  color: var(--label);
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.tb-capsule:hover,
+sl-dropdown[open] .tb-capsule {
+  background: var(--capsule-hover);
+}
+
+.target-trigger {
+  min-width: 0;
+}
 
 .target-app {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   overflow: hidden;
-  font-family: 'JetBrains Mono', var(--sl-font-mono);
-  color: var(--sl-color-neutral-500);
   text-overflow: ellipsis;
 }
 
-.target-app:not(:empty)::before {
-  content: '· ';
+.ta-sep,
+.target-caret {
+  font-size: 11px;
+  color: var(--label-3);
 }
 
-.target-caret {
-  flex-shrink: 0;
-  margin-left: 2px;
-  color: var(--sl-color-neutral-500);
+.ta-device-icon {
   font-size: 13px;
+  color: var(--label-2);
+}
+
+.ta-app,
+.ta-device {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tb-count {
+  gap: 5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.tb-count sl-icon {
+  color: var(--sys-yellow);
 }
 
 .conn-dot {
-  position: relative;
-  flex-shrink: 0;
   width: 8px;
   height: 8px;
+  flex-shrink: 0;
   border-radius: 50%;
-  background: var(--sl-color-neutral-400);
+  background: var(--sys-gray);
 }
 
 .conn-dot[data-state='live'] {
-  background: var(--sl-color-success-500);
-}
-
-.conn-dot[data-state='live']::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: inherit;
-  animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+  background: var(--sys-green);
 }
 
 .conn-dot[data-state='replay'] {
-  background: var(--sl-color-primary-500);
+  background: var(--sys-blue);
 }
 
-.conn-dot[data-state='no-app'],
-.conn-dot[data-state='disconnected'] {
-  background: var(--sl-color-warning-500);
+.conn-dot[data-state='disconnected'],
+.conn-dot[data-state='connecting'],
+.conn-dot[data-state='no-app'] {
+  background: var(--sys-orange);
 }
 
-.conn-dot[data-state='server-down'],
-.conn-dot[data-state='no-server'] {
-  background: var(--sl-color-danger-500);
+.conn-dot[data-state='no-server'],
+.conn-dot[data-state='server-down'] {
+  background: var(--sys-red);
 }
 
-@keyframes ping {
-  75%,
-  100% {
-    transform: scale(2.6);
-    opacity: 0;
-  }
-}
-
-/* Vitals: instrument-style readouts, label over value. */
+/* Vitals: compact readouts, value over label. */
 .vitals {
   display: flex;
-  flex: 1;
   align-items: center;
+  gap: 14px;
   min-width: 0;
   overflow: hidden;
-  mask-image: linear-gradient(90deg, #000 90%, transparent);
+  flex-shrink: 1;
 }
 
 .vital {
   display: grid;
-  gap: 1px;
-  padding: 0 var(--sl-spacing-medium);
-  border-left: solid 1px var(--border);
+  line-height: 1.15;
   white-space: nowrap;
   cursor: help;
-}
-
-sl-tooltip:first-child .vital {
-  border-left: 0;
-}
-
-.vital .vk {
-  font-size: 10px;
-  font-weight: var(--sl-font-weight-semibold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--sl-color-neutral-500);
 }
 
 .vital .vv {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  font-family: 'JetBrains Mono', var(--sl-font-mono);
-  font-size: 14px;
-  font-weight: 500;
+  gap: 4px;
+  font-family: var(--font-rounded);
+  font-size: 13px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
-  color: var(--sl-color-neutral-1000);
+  color: var(--label);
+}
+
+.vital .vk {
+  font-size: 10px;
+  color: var(--label-2);
 }
 
 .vital .vd {
-  font-size: 11px;
-  color: var(--sl-color-success-500);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--sys-green);
 }
 
 .vital .vd.up {
-  color: var(--freeze);
+  color: var(--sys-orange);
 }
 
-.vital:hover .vk {
-  color: var(--sl-color-neutral-700);
-}
-
-/* Actions */
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--sl-spacing-x-small);
+/* Segmented control. */
+.tb-segmented {
   flex-shrink: 0;
 }
 
-.toolbar sl-radio-group::part(button-group__base) {
+.tb-segmented::part(button-group__base) {
   padding: 2px;
-  border: solid 1px var(--border);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--sl-color-neutral-0) 55%, transparent);
+  border-radius: 8px;
+  background: var(--capsule);
 }
 
-.toolbar sl-radio-button::part(button) {
+.tb-segmented sl-radio-button::part(button) {
   height: 26px;
   min-height: 26px;
+  padding: 0 10px;
   border: 0;
-  border-radius: 7px !important;
+  border-radius: 6px !important;
   background: none;
-  font-family: 'JetBrains Mono', var(--sl-font-mono);
-  font-size: 11px;
-  color: var(--sl-color-neutral-500);
-}
-
-.toolbar sl-radio-button::part(button):hover {
-  color: var(--sl-color-neutral-900);
-}
-
-.toolbar sl-radio-button[checked]::part(button) {
-  background: var(--sl-color-neutral-200);
-  color: var(--sl-color-neutral-1000);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
-}
-
-.tool-group {
-  display: flex;
-  align-items: center;
-  padding: 2px;
-  border: solid 1px var(--border);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--sl-color-neutral-0) 55%, transparent);
-}
-
-.tool-group sl-button {
-  /* Shoelace derives the label's line-height from this, so shrink it rather than the box. */
-  --sl-input-height-small: 26px;
-}
-
-.tool-group sl-button::part(base) {
-  align-items: center;
-  padding: 0 4px;
-  border-radius: 7px;
-  color: var(--sl-color-neutral-700);
-}
-
-.tool-group sl-button::part(label) {
-  padding: 0 8px 0 4px;
+  font-family: var(--sl-font-sans);
   font-size: 12px;
+  font-weight: 500;
+  color: var(--label-2);
 }
 
-.tool-group sl-button::part(prefix) {
-  padding-left: 4px;
+.tb-segmented sl-radio-button::part(button):hover {
+  color: var(--label);
 }
 
-.tool-group sl-button::part(base):hover {
-  background: var(--sl-color-neutral-100);
-  color: var(--sl-color-neutral-1000);
+.tb-segmented sl-radio-button[checked]::part(button) {
+  background: var(--accent);
+  color: var(--label);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
 }
 
-.tool-group sl-button[variant='warning']::part(base) {
-  background: color-mix(in srgb, var(--freeze) 18%, transparent);
-  border-color: transparent;
-  color: var(--freeze);
+.topbar.replay .tb-group,
+.topbar.replay #reset-btn,
+.topbar.replay #menu-pause,
+.topbar.replay #menu-sample,
+.topbar.replay #menu-run {
+  display: none;
 }
 
-#settings-btn {
-  font-size: 17px;
+.menu-key,
+.menu-hint {
+  font-size: 12px;
+  color: var(--label-3);
 }
 
-#settings-btn::part(base) {
-  padding: 7px;
-  border-radius: 9px;
+@media (max-width: 1280px) {
+  .tb-btn-label,
+  .vital .vk {
+    display: none;
+  }
 }
 
-#settings-btn::part(base):hover {
-  background: var(--sl-color-neutral-100);
-}
-
-@media (max-width: 1180px) {
-  .tool-group sl-button::part(label) {
+@media (max-width: 1100px) {
+  .vitals {
     display: none;
   }
 }
@@ -493,7 +573,7 @@ sl-radio-group::part(form-control-label) {
 
 .inspector {
   display: block;
-  background: var(--surface);
+  background: var(--bg-grouped);
 }
 
 .section-head {
@@ -502,9 +582,13 @@ sl-radio-group::part(form-control-label) {
   display: flex;
   align-items: center;
   gap: var(--sl-spacing-x-small);
-  min-height: 48px;
+  min-height: 44px;
   padding: var(--sl-spacing-x-small) var(--sl-spacing-medium);
   border-bottom: solid 1px var(--border);
+}
+
+.inspector .section-head {
+  border-bottom: 0;
 }
 
 .legend {
@@ -584,56 +668,98 @@ sl-radio-group::part(form-control-label) {
   min-height: 0;
 }
 
+/* An inset grouped list, as in the Settings app: one rounded group, hairline
+   separators inset past the icon, a tinted icon square and a chevron per row. */
 .events {
   overflow-y: auto;
   min-height: 0;
-  padding: var(--sl-spacing-x-small);
+  padding: 4px 14px 16px;
 }
 
 .event {
+  --tint: var(--sys-orange);
+  position: relative;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: 30px 1fr auto;
   align-items: center;
-  gap: 2px var(--sl-spacing-small);
+  gap: 1px 12px;
   width: 100%;
-  padding: var(--sl-spacing-small);
-  margin-bottom: 2px;
-  border: solid 1px transparent;
-  border-radius: var(--sl-border-radius-medium);
-  background: none;
+  min-height: 56px;
+  padding: 9px 30px 9px 12px;
+  border: 0;
+  border-radius: 0;
+  background: var(--cell) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='13' viewBox='0 0 8 13'%3E%3Cpath d='M1.5 1.5l5 5-5 5' fill='none' stroke='%23636366' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 12px center;
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
-  transition: var(--sl-transition-fast) background-color;
+  cursor: default;
+}
+
+.event:first-child {
+  border-radius: 10px 10px 0 0;
+}
+
+.event:last-child {
+  border-radius: 0 0 10px 10px;
+}
+
+.event:only-child {
+  border-radius: 10px;
+}
+
+.event:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 54px;
+  height: 1px;
+  background: var(--separator);
 }
 
 .event:hover {
-  background: var(--sl-color-neutral-100);
+  background-color: #323234;
+}
+
+.event:active {
+  background-color: #3a3a3c;
 }
 
 .event.selected {
-  border-color: var(--sl-color-primary-600);
-  background: var(--sl-color-primary-50);
+  background-color: var(--accent);
 }
 
+.event.selected .title,
+.event.selected .where,
+.event.selected .meta {
+  color: #fff;
+}
+
+.event:focus-visible {
+  outline: 3px solid var(--sl-focus-ring-color);
+  outline-offset: -3px;
+}
+
+/* Shoelace sizes icons as content-box, so the square is 18px + 6px padding. */
 .event .icon {
   grid-row: span 2;
-  font-size: 1.1rem;
-  color: var(--freeze);
+  width: 18px;
+  height: 18px;
+  padding: 6px;
+  border-radius: 7px;
+  background: var(--tint);
+  color: #fff;
+  font-size: 18px;
 }
 
-.event.severe .icon {
-  color: var(--freeze-severe);
-}
-
-.event.hot .icon {
-  color: var(--sampled);
-}
+.event.severe { --tint: var(--sys-red); }
+.event.hot { --tint: var(--sys-pink); }
 
 .event .title {
   overflow: hidden;
-  font-weight: var(--sl-font-weight-semibold);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--label);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -641,9 +767,8 @@ sl-radio-group::part(form-control-label) {
 .event .where {
   grid-column: 2;
   overflow: hidden;
-  font-family: var(--sl-font-mono);
-  font-size: var(--sl-font-size-x-small);
-  color: var(--sl-color-neutral-600);
+  font-size: 12px;
+  color: var(--label-2);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -652,10 +777,23 @@ sl-radio-group::part(form-control-label) {
   grid-row: span 2;
   display: grid;
   justify-items: end;
-  gap: 2px;
-  font-size: var(--sl-font-size-x-small);
-  color: var(--sl-color-neutral-500);
+  gap: 3px;
+  font-size: 11px;
+  color: var(--label-3);
 }
+
+/* Tinted pills instead of solid badges. */
+sl-badge::part(base) {
+  border: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+sl-badge[variant='danger']::part(base) { background: color-mix(in srgb, var(--sys-red) 22%, transparent); color: #ff6961; }
+sl-badge[variant='warning']::part(base) { background: color-mix(in srgb, var(--sys-orange) 22%, transparent); color: var(--sys-orange); }
+sl-badge[variant='primary']::part(base) { background: color-mix(in srgb, var(--accent) 26%, transparent); color: var(--accent-text); }
+sl-badge[variant='success']::part(base) { background: color-mix(in srgb, var(--sys-green) 22%, transparent); color: var(--sys-green); }
+sl-badge[variant='neutral']::part(base) { background: var(--fill); color: var(--label-2); }
 
 .events-empty {
   padding: var(--sl-spacing-3x-large) var(--sl-spacing-x-large);
@@ -705,15 +843,18 @@ sl-radio-group::part(form-control-label) {
 }
 
 .d-big .num {
-  font-family: var(--sl-font-mono);
-  font-size: var(--sl-font-size-3x-large);
-  font-weight: var(--sl-font-weight-semibold);
-  letter-spacing: -0.02em;
+  font-family: var(--font-rounded);
+  font-size: 44px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
   line-height: 1;
 }
 
 .d-big .unit {
-  color: var(--sl-color-neutral-600);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--label-2);
 }
 
 .d-time {
@@ -724,9 +865,9 @@ sl-radio-group::part(form-control-label) {
 
 .d-summary {
   margin: var(--sl-spacing-medium) 0 0;
-  font-size: var(--sl-font-size-small);
-  line-height: var(--sl-line-height-loose);
-  color: var(--sl-color-neutral-800);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--label);
 }
 
 .d-summary code {
@@ -745,19 +886,31 @@ sl-radio-group::part(form-control-label) {
   display: flex;
   align-items: baseline;
   gap: var(--sl-spacing-x-small);
-  margin: 0 0 var(--sl-spacing-x-small);
-  font-size: var(--sl-font-size-x-small);
-  font-weight: var(--sl-font-weight-semibold);
-  letter-spacing: var(--sl-letter-spacing-loose);
-  text-transform: uppercase;
-  color: var(--sl-color-neutral-600);
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--label);
 }
 
 .d-section > h3 small {
-  font-weight: var(--sl-font-weight-normal);
-  letter-spacing: normal;
-  text-transform: none;
-  color: var(--sl-color-neutral-500);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--label-2);
+}
+
+/* iOS back button: blue chevron and the previous screen's name. */
+.d-top .back::part(base) {
+  padding: 0;
+  color: var(--accent-text);
+  font-size: 15px;
+}
+
+.d-top .back::part(prefix) {
+  font-size: 19px;
+}
+
+.d-top .back::part(label) {
+  padding-left: 2px;
 }
 
 sl-card {
@@ -1054,13 +1207,7 @@ sl-card::part(header) {
   gap: var(--sl-spacing-2x-small);
 }
 
-.event.uncaught {
-  opacity: 0.55;
-}
-
-.event.uncaught .icon {
-  color: var(--sl-color-neutral-500);
-}
+.event.uncaught { --tint: var(--sys-gray); }
 
 #filter {
   width: 210px;
@@ -1115,17 +1262,12 @@ sl-card::part(header) {
   word-break: break-word;
 }
 
-.event.warn .icon {
-  color: var(--freeze);
-}
+.event.warn { --tint: var(--sys-orange); }
 
-.event.net .icon {
-  font-size: 1rem;
-}
+.event.net { --tint: var(--sys-teal); }
+.event.net.severe { --tint: var(--sys-red); }
 
-.event.startup .icon {
-  color: var(--sl-color-primary-500);
-}
+.event.startup { --tint: var(--sys-blue); }
 
 .console-text {
   margin: var(--sl-spacing-small) 0 0;
@@ -1224,14 +1366,13 @@ sl-tooltip {
 
 .renders {
   display: grid;
-  gap: var(--sl-spacing-x-small);
+  gap: 6px;
 }
 
 .render-row {
-  padding: var(--sl-spacing-x-small) var(--sl-spacing-small);
-  border: solid 1px var(--border);
-  border-radius: var(--sl-border-radius-medium);
-  background: var(--surface-raised);
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--cell);
 }
 
 .render-head {
@@ -1276,4 +1417,30 @@ sl-tooltip {
 
 .run-compare .worse {
   color: var(--sl-color-danger-600);
+}
+
+/* Main buttons: solid accent fill, white text. */
+sl-button[variant='primary']::part(base) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+sl-button[variant='primary']::part(base):hover {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+sl-button[variant='primary']::part(base):active {
+  border-color: var(--accent-pressed);
+  background: var(--accent-pressed);
+}
+
+sl-tooltip::part(body) {
+  border: 1px solid rgb(255 255 255 / 0.12);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.5);
+}
+
+.hover-tip {
+  border: 1px solid rgb(255 255 255 / 0.12);
 }

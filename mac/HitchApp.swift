@@ -8,7 +8,12 @@ import WebKit
 
 let hitchURL = URL(string: "http://127.0.0.1:7370/")!
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate {
+// The page draws a 52pt toolbar at the top (like Xcode's unified toolbar);
+// the window's own title bar is hidden behind it and the traffic lights are
+// centered in that bar.
+let toolbarHeight: CGFloat = 52
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     var window: NSWindow!
     var webView: WKWebView!
     var server: Process?
@@ -18,18 +23,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         buildMenu()
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        // Tells the page it is inside Hitch.app, so it leaves room for the traffic
+        // lights and lets its toolbar drag the window.
+        let shell = """
+        document.documentElement.dataset.shell = 'mac';
+        addEventListener('mousedown', e => {
+          if (e.button !== 0 || !e.target.closest('.topbar')) return;
+          if (e.target.closest('button, a, input, select, textarea, [role=group], sl-dropdown, sl-radio-group, sl-tooltip *, sl-menu, .vital')) return;
+          window.webkit.messageHandlers.hitch.postMessage(e.detail === 2 ? 'zoom' : 'drag');
+        }, true);
+        """
+        config.userContentController.addUserScript(WKUserScript(source: shell, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        config.userContentController.add(self, name: "hitch")
         webView = WKWebView(frame: .zero, configuration: config)
         webView.uiDelegate = self
         webView.navigationDelegate = self
         webView.loadHTMLString(Self.startingPage, baseURL: nil)
 
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Hitch"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.backgroundColor = NSColor(calibratedRed: 0.17, green: 0.17, blue: 0.18, alpha: 1)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.delegate = self
         window.minSize = NSSize(width: 900, height: 560)
         window.contentView = webView
         window.center()
         window.setFrameAutosaveName("HitchMain")
         window.makeKeyAndOrderFront(nil)
+        layoutTrafficLights()
         NSApp.activate(ignoringOtherApps: true)
 
         isServing { serving in
@@ -39,6 +62,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    // Centers the close/minimize/zoom buttons in the page's 52pt toolbar.
+    func layoutTrafficLights() {
+        guard let close = window.standardWindowButton(.closeButton), let titlebar = close.superview?.superview else { return }
+        if window.styleMask.contains(.fullScreen) { return }
+        var frame = titlebar.frame
+        frame.size.height = toolbarHeight
+        frame.origin.y = window.frame.height - toolbarHeight
+        titlebar.frame = frame
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        for (index, type) in buttons.enumerated() {
+            guard let button = window.standardWindowButton(type) else { continue }
+            button.setFrameOrigin(NSPoint(x: 18 + CGFloat(index) * 20, y: (toolbarHeight - button.frame.height) / 2))
+        }
+    }
+
+    func windowDidResize(_ notification: Notification) { layoutTrafficLights() }
+    func windowDidBecomeKey(_ notification: Notification) { layoutTrafficLights() }
+    func windowDidExitFullScreen(_ notification: Notification) {
+        layoutTrafficLights()
+        webView.evaluateJavaScript("document.documentElement.dataset.shell = 'mac'")
+    }
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        // No traffic lights in full screen: the toolbar can use the space.
+        webView.evaluateJavaScript("document.documentElement.dataset.shell = 'mac-fullscreen'")
+    }
+
+    // The page's toolbar is the title bar: dragging it moves the window, and a
+    // double-click zooms (or minimizes, per the system setting).
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let action = message.body as? String else { return }
+        if action == "drag", let event = NSApp.currentEvent {
+            window.performDrag(with: event)
+        } else if action == "zoom" {
+            if UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") == "Minimize" {
+                window.performMiniaturize(nil)
+            } else {
+                window.performZoom(nil)
+            }
+        }
+    }
 
     // Hitch saves its report on SIGTERM; give it a moment before the app exits.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
