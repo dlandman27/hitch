@@ -1129,7 +1129,7 @@ function highlight(line) {
 async function loadCode(container, file, line) {
   const res = await fetch(`/api/source?file=${encodeURIComponent(file)}&line=${line}&context=7`);
   if (!res.ok) {
-    container.innerHTML = '<sl-alert open variant="neutral">Source not readable from the project folder.</sl-alert>';
+    container.innerHTML = '<sl-alert open variant="neutral"><sl-icon slot="icon" name="info-circle-fill"></sl-icon>Source not readable from the project folder.</sl-alert>';
     return;
   }
   const src = await res.json();
@@ -1249,7 +1249,7 @@ function renderStallDetail(root, stall) {
   const repeat = same.length > 1 ? ` · <sl-badge variant="warning" pill>${same.length}× this session</sl-badge>` : '';
 
   if (stall.stale) {
-    root.insertAdjacentHTML('beforeend', '<sl-alert open variant="warning" style="margin-bottom:var(--sl-spacing-medium)"><sl-icon slot="icon" name="exclamation-triangle"></sl-icon>Captured while the app ran an older bundle than Metro — the file and line below may be wrong. Reload the app and reproduce it.</sl-alert>');
+    root.insertAdjacentHTML('beforeend', '<sl-alert open variant="warning" style="margin-bottom:var(--sl-spacing-medium)"><sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon><strong>Captured while the app ran older code.</strong> The file and line below may be wrong; reload the app and reproduce it.</sl-alert>');
   }
   root.insertAdjacentHTML(
     'beforeend',
@@ -1269,7 +1269,7 @@ function renderStallDetail(root, stall) {
   if (renders) root.append(renders);
 
   if (stall.snapshotCount > 0 && stall.snapshotCount <= 2) {
-    root.insertAdjacentHTML('beforeend', `<sl-alert open variant="neutral" class="dev-alert"><sl-icon slot="icon" name="info-circle"></sl-icon>Only ${stall.snapshotCount} stack capture${stall.snapshotCount === 1 ? '' : 's'}, so treat the location as a lead, not proof. Repeat the interaction to collect more.</sl-alert>`);
+    root.insertAdjacentHTML('beforeend', `<sl-alert open variant="neutral" class="dev-alert"><sl-icon slot="icon" name="info-circle-fill"></sl-icon>Only ${stall.snapshotCount} stack capture${stall.snapshotCount === 1 ? '' : 's'}, so treat the location as a lead, not proof. Repeat the interaction to collect more.</sl-alert>`);
   }
 
   if (react?.components.length) {
@@ -1314,7 +1314,7 @@ function renderStallDetail(root, stall) {
       card.querySelector('.loc').addEventListener('click', () => openEditor(top.file, top.line));
       loadCode(card.querySelector('.code-slot'), top.file, top.line);
     } else {
-      card.querySelector('.code-slot').innerHTML = '<sl-alert open variant="neutral" style="margin:var(--sl-spacing-small)">No source line: this frame is native or inside the Hermes runtime. The stack below shows which of your code called it.</sl-alert>';
+      card.querySelector('.code-slot').innerHTML = '<sl-alert open variant="neutral" style="margin:var(--sl-spacing-small)"><sl-icon slot="icon" name="info-circle-fill"></sl-icon>No source line: this frame is native or inside the Hermes runtime. The stack below shows which of your code called it.</sl-alert>';
     }
   }
 
@@ -1451,7 +1451,7 @@ function renderConsoleDetail(root, c) {
     root.append(latest);
   }
   if (c.source) codeCard(root, 'Logged from', c.source);
-  else root.insertAdjacentHTML('beforeend', '<sl-alert open variant="neutral" class="dev-alert"><sl-icon slot="icon" name="info-circle"></sl-icon>No app code on the stack. This came from a library or native module.</sl-alert>');
+  else root.insertAdjacentHTML('beforeend', '<sl-alert open variant="neutral" class="dev-alert"><sl-icon slot="icon" name="info-circle-fill"></sl-icon>No app code on the stack. This came from a library or native module.</sl-alert>');
   const related = relatedSection('Around this message', relatedAround(c.at - 1500, c.at + 1500, c.id));
   if (related) root.append(related);
   const logs = logsSection(c.at - 5000, c.at + 500);
@@ -1611,7 +1611,7 @@ function renderHotDetail(root, hot) {
 // ---------------------------------------------------------------- actions
 
 function toast(text, variant = 'primary') {
-  const icon = { primary: 'info-circle', success: 'check2-circle', danger: 'exclamation-octagon' }[variant];
+  const icon = { primary: 'info-circle-fill', success: 'check-circle-fill', warning: 'exclamation-triangle-fill', danger: 'x-circle-fill', neutral: 'info-circle-fill' }[variant] ?? 'info-circle-fill';
   const alert = Object.assign(document.createElement('sl-alert'), { variant, closable: true, duration: 3500 });
   alert.innerHTML = `<sl-icon slot="icon" name="${icon}"></sl-icon>${esc(text)}`;
   document.body.append(alert);

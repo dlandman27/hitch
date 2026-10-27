@@ -622,9 +622,105 @@ sl-radio-group::part(form-control-label) {
   border-bottom: 0;
 }
 
-#stale-alert,
-#phone-note {
-  margin: var(--sl-spacing-small) var(--sl-spacing-medium) 0;
+/* ---------- notices: banners, inline notes and toasts ----------
+   One look for every sl-alert: a soft strip tinted by its kind, no frame,
+   a tinted icon, and any action as a quiet pill on the right. Toasts use a
+   dark material panel instead, like macOS notifications. */
+sl-alert {
+  --tint: var(--sys-gray);
+}
+
+sl-alert[variant='primary'] { --tint: var(--accent-text); }
+sl-alert[variant='success'] { --tint: var(--sys-green); }
+sl-alert[variant='warning'] { --tint: var(--sys-orange); }
+sl-alert[variant='danger'] { --tint: var(--sys-red); }
+
+sl-alert::part(base) {
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--tint) 13%, var(--bg));
+  box-shadow: none;
+  font-family: var(--sl-font-sans);
+}
+
+sl-alert::part(icon) {
+  padding-left: 13px;
+  color: var(--tint);
+  font-size: 15px;
+}
+
+sl-alert::part(message) {
+  padding: 9px 12px 9px 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--label-2);
+}
+
+sl-alert::part(close-button) {
+  color: var(--label-3);
+}
+
+sl-alert strong {
+  font-weight: 600;
+  color: var(--label);
+}
+
+sl-alert sl-button {
+  flex-shrink: 0;
+}
+
+sl-alert sl-button::part(base) {
+  height: 26px;
+  min-height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--tint) 22%, transparent);
+  color: var(--tint);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 26px;
+}
+
+sl-alert sl-button::part(base):hover {
+  background: color-mix(in srgb, var(--tint) 32%, transparent);
+}
+
+/* Banners over the lanes. */
+.banner {
+  margin: 10px 14px 0;
+}
+
+.banner-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Toasts: under the toolbar on the right, on a dark material. */
+.sl-toast-stack {
+  top: 60px;
+  right: 14px;
+  width: 340px;
+  max-width: calc(100% - 28px);
+}
+
+.sl-toast-stack sl-alert {
+  margin: 0 0 8px;
+}
+
+.sl-toast-stack sl-alert::part(base) {
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 12px;
+  background: rgb(44 44 46 / 0.86);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+}
+
+.sl-toast-stack sl-alert::part(message) {
+  color: var(--label);
+  font-size: 13px;
 }
 
 .threads,

@@ -101,23 +101,25 @@
 
       <section slot="start" class="threads" aria-label="Threads">
         <div class="vitals-bar" id="vitals" aria-label="App vitals"></div>
-        <sl-alert id="phone-note" variant="primary" hidden>
+        <sl-alert id="phone-note" class="banner" variant="primary" hidden>
           <sl-icon slot="icon" name="phone"></sl-icon><span></span>
         </sl-alert>
-        <sl-alert id="stale-alert" variant="warning" hidden>
-          <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-          <strong>The app is running an older JS bundle than Metro.</strong> Code lines may point at the wrong place until it reloads.
-          <sl-button id="reload-btn" size="small" variant="warning" slot="" style="margin-left: var(--sl-spacing-small)"><sl-icon slot="prefix" name="arrow-clockwise"></sl-icon>Reload app</sl-button>
+        <sl-alert id="stale-alert" class="banner" variant="warning" hidden>
+          <sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon>
+          <div class="banner-row">
+            <span><strong>The app is running older code than Metro has.</strong> Lines may point to the wrong place until it reloads.</span>
+            <sl-button id="reload-btn" size="small"><sl-icon slot="prefix" name="arrow-clockwise"></sl-icon>Reload app</sl-button>
+          </div>
         </sl-alert>
-        <sl-alert id="map-alert" variant="warning" hidden>
-          <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <sl-alert id="map-alert" class="banner" variant="warning" hidden>
+          <sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon>
           <strong>Hitch's source map doesn't match the bundle the app is running.</strong> Metro may still be rebuilding after a pull or branch switch; Hitch keeps checking. Until it matches, your own files and lines in findings may be wrong (library frames are fine).
         </sl-alert>
         <div class="lanes-wrap" id="lanes-wrap">
           <canvas id="lanes"></canvas>
           <div class="hover-tip" id="hover-tip" hidden></div>
           <sl-alert id="lanes-empty" variant="primary" hidden>
-            <sl-icon slot="icon" name="info-circle"></sl-icon> Thread lanes need the app running in the iOS simulator.
+            <sl-icon slot="icon" name="info-circle-fill"></sl-icon>Thread lanes need the app running in the iOS simulator.
           </sl-alert>
         </div>
         <div class="section-head threads-foot">
