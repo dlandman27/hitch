@@ -2631,6 +2631,21 @@ async function refreshView(view) {
 }
 $('#view-select').addEventListener('sl-change', e => setView(e.target.value));
 $('#view-select-compact').addEventListener('sl-change', e => setView(e.target.value));
+// Shoelace opens a select on mousedown and picks the option under the pointer on
+// mouseup, so letting go of the press that opened it picked a view. Skip that release.
+function ignoreOpeningRelease(select) {
+  let opening = false;
+  select.addEventListener('mousedown', () => (opening = !select.open), true);
+  select.addEventListener(
+    'mouseup',
+    e => {
+      if (opening && e.target.closest?.('sl-option')) e.stopPropagation();
+      opening = false;
+    },
+    true,
+  );
+}
+ignoreOpeningRelease($('#view-select-compact'));
 
 // Jumps the timeline to a moment (pausing it there), e.g. from a log line.
 function jumpTo(at) {
