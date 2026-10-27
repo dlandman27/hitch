@@ -322,6 +322,9 @@ function setStatus(status) {
     : 'No app yet';
   const since = status.startedAt ? new Date(status.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null;
   $('#tb-detail').textContent = status.screen ? ` · on ${status.screen}` : since && status.state !== 'replay' ? ` · since ${since}` : '';
+  const refused = (status.health?.debuggerDrops ?? 0) >= 8 && status.state !== 'live';
+  $('#debugger-alert').hidden = !refused;
+  $('#debugger-alert').open = refused;
   const mismatch = status.health?.symbols === 'mismatch';
   $('#map-alert').hidden = !mismatch;
   $('#map-alert').open = mismatch;

@@ -132,7 +132,11 @@
               <sl-button id="reload-btn" size="small"><sl-icon slot="prefix" name="arrow-clockwise"></sl-icon>Reload app</sl-button>
             </div>
           </sl-alert>
-          <sl-alert id="map-alert" class="banner" variant="warning" hidden>
+          <sl-alert id="debugger-alert" class="banner" variant="warning" hidden>
+          <sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon>
+          <strong>The app's debugger keeps closing the connection.</strong> Freezes, console, network and React data need it. React Native DevTools would fail too: restart Metro and the app, and check your React Native and Expo versions.
+        </sl-alert>
+        <sl-alert id="map-alert" class="banner" variant="warning" hidden>
             <sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon>
             <strong>Hitch's source map doesn't match the bundle the app is running.</strong> Metro may still be rebuilding after a pull or branch switch; Hitch keeps checking. Until it matches, your own files and lines in findings may be wrong (library frames are fine).
           </sl-alert>

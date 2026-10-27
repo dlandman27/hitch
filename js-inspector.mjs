@@ -3,6 +3,7 @@
 // stack of whatever JS is running right now.
 
 import { EventEmitter } from 'node:events';
+import os from 'node:os';
 
 import { formatConsoleArgs, previewFromProperties } from './console-format.mjs';
 
@@ -21,9 +22,23 @@ export async function findTarget(metroUrl, appId, device) {
   return pages.filter(p => p.webSocketDebuggerUrl && (!appId || p.appId === appId) && (!device || p.deviceName === device)).at(-1) ?? null;
 }
 
-export function connectInspector({ metroUrl, target }) {
+// Origins to present when connecting, most likely first. Expo's CLI kills a
+// debugger socket unless the Origin's host exactly matches the address Metro
+// thinks it has (expo/expo#52327): often 127.0.0.1 where we'd say localhost,
+// or a LAN address when a packager hostname is set.
+export function originCandidates(metroUrl) {
+  const url = new URL(metroUrl);
+  const port = url.port ? `:${url.port}` : '';
+  const lan = Object.values(os.networkInterfaces())
+    .flat()
+    .filter(i => i && i.family === 'IPv4' && !i.internal)
+    .map(i => `${url.protocol}//${i.address}${port}`);
+  return [...new Set([url.origin, `${url.protocol}//127.0.0.1${port}`, `${url.protocol}//localhost${port}`, ...lan])];
+}
+
+export function connectInspector({ metroUrl, target, origin = metroUrl }) {
   const events = new EventEmitter();
-  const ws = new WebSocket(target.webSocketDebuggerUrl, { headers: { Origin: metroUrl } });
+  const ws = new WebSocket(target.webSocketDebuggerUrl, { headers: { Origin: origin } });
   const scripts = new Map();
   const pending = new Map();
   let nextId = 0;

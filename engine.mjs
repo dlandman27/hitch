@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { connectInspector, findTarget } from './js-inspector.mjs';
+import { connectInspector, findTarget, originCandidates } from './js-inspector.mjs';
 import { bootedSimulatorNames } from './discovery.mjs';
 import { findSimulatorPid, sampleNative } from './native-sample.mjs';
 import { createObservers } from './observers.mjs';
@@ -250,6 +250,8 @@ export function startEngine(initial) {
   let stopPing = null;
   let stopped = false;
   let pid = null;
+  // Which Origin to present next; it sticks once one works.
+  let originIndex = 0;
   // An Android device or emulator running the app: threads come over adb.
   let androidApp = null;
 
@@ -441,7 +443,8 @@ export function startEngine(initial) {
         startNative(startAndroidThreadMonitor({ serial: androidApp.serial, pid: androidApp.pid }));
       }
     }
-    inspector = connectInspector({ metroUrl: initial.metro, target });
+    const origins = originCandidates(initial.metro);
+    inspector = connectInspector({ metroUrl: initial.metro, target, origin: origins[originIndex % origins.length] });
     inspector.on('console', raw => observers.onConsole(raw));
     inspector.on('network', (method, params) => observers.onNetwork(method, params));
     inspector.on('reloaded', () => {
@@ -473,6 +476,11 @@ export function startEngine(initial) {
       }
     });
     inspector.on('error', error => events.emit('log', error.message));
+    let wasReady = false;
+    inspector.on('ready', () => {
+      wasReady = true;
+      setHealth({ debuggerDrops: 0 });
+    });
     inspector.on('close', () => {
       probe.stop();
       setHealth({ probe: 'off' });
@@ -480,10 +488,19 @@ export function startEngine(initial) {
       stopPing = null;
       inspector = null;
       if (stopped) return;
-      // The debugger link drops when the JS reloads: time the next start.
-      observers.onReloadStarted();
+      if (wasReady) {
+        // The debugger link drops when the JS reloads: time the next start.
+        observers.onReloadStarted();
+      } else {
+        // Closed before it ever worked. Usually Expo rejecting the Origin
+        // (expo/expo#52327): try the next name for this Mac, quickly, and only
+        // slow down once every name has failed.
+        originIndex += 1;
+        setHealth({ debuggerDrops: (status.health.debuggerDrops ?? 0) + 1 });
+      }
       setStatus({ state: 'disconnected' });
-      setTimeout(attach, 1500);
+      const triedAll = originIndex > 0 && originIndex % originCandidates(initial.metro).length === 0;
+      setTimeout(attach, wasReady ? 1500 : triedAll ? 5000 : 200);
     });
   };
 
