@@ -846,9 +846,25 @@ sl-badge[variant='neutral']::part(base) { background: var(--fill); color: var(--
 }
 
 .detail-scroll {
+  overflow-x: hidden;
   overflow-y: auto;
   min-height: 0;
   padding: var(--sl-spacing-medium) var(--sl-spacing-large) var(--sl-spacing-x-large);
+}
+
+/* Long code and stack lines scroll inside their own box; the page itself
+   never scrolls sideways, however narrow the panel. */
+.detail-scroll > *,
+.d-section,
+.d-section > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.detail-scroll sl-card::part(base),
+.detail-scroll sl-card::part(body) {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .d-top {
@@ -1428,6 +1444,7 @@ sl-tooltip {
 
 .renders {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
@@ -1444,6 +1461,10 @@ sl-tooltip {
 }
 
 .render-head .fn {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--sl-font-mono);
   font-weight: var(--sl-font-weight-semibold);
   color: var(--sl-color-neutral-900);
