@@ -639,6 +639,9 @@ export function startEngine(initial) {
     history.lanes.length = 0;
     history.jank.length = 0;
     history.screens.length = 0;
+    // What React rendered goes too, so the React view starts over with the rest.
+    probe.commits.length = 0;
+    probe.frames.length = 0;
     observers.clear();
     events.emit('event', { type: 'cleared' });
   };

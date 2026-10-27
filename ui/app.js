@@ -295,8 +295,13 @@ function connect() {
       state.jank = [];
       state.screens = [];
       state.selectedId = null;
+      lastReact = null;
+      networkKey = '';
+      heapState.diff = null;
       renderEvents();
       showList();
+      // The open view shows the cleared state right away.
+      if (state.view !== 'timeline') refreshView(state.view);
     }
   };
   source.onerror = () => setStatus({ ...(state.status ?? {}), state: 'server-down' });
