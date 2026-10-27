@@ -1,6 +1,10 @@
-# Hitch
+<p align="center">
+  <img src="ui/brand/icon-192.png" alt="Hitch" width="112" height="112" />
+</p>
 
-**Find out why your React Native app is slow, while you use it.**
+<h1 align="center">Hitch</h1>
+
+<p align="center"><strong>Find out why your React Native app is slow, while you use it.</strong></p>
 
 Hitch watches your app from the outside while you test it in the simulator. When the app freezes, stutters, re-renders too much, logs an error, waits on a slow request or leaks memory, Hitch catches it, points at the code responsible and explains why it happened. One click turns any of it into a prompt for an AI agent.
 
