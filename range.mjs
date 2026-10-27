@@ -60,7 +60,7 @@ export function rangePrompt(range) {
     `Hitch recorded this slice of a React Native dev session${range.screens[0] ? ` around the **${range.screens.map(s => s.name).join(' → ')}** screen(s)` : ''}.`,
     '',
     '## What happened',
-    `- JS thread blocked **${range.blockedMs}ms** over ${range.stalls.length} freeze(s)${range.devOnlyMs ? ` (${range.devOnlyMs}ms of it dev-only tooling)` : ''}`,
+    range.stalls.length ? `- JS thread blocked **${range.blockedMs}ms** over ${range.stalls.length} freeze(s)${range.devOnlyMs ? ` (${range.devOnlyMs}ms of it dev-only tooling)` : ''}` : '- No JS freezes',
     ...range.jank.map(j => `- Choppy frames: ${j.fps} fps for ${j.seconds}s, ${j.dropped} frames dropped outside freezes`),
     ...range.screens.map(s => `- Screen ${s.name} took ${(s.ms / 1000).toFixed(1)}s to settle (${s.commits} commits, ${s.mounts} mounts)`),
     ...range.requests.filter(r => r.issue).map(r => `- ${r.failed ? 'Failed' : 'Slow'} request ${r.method} ${r.url.slice(0, 120)} (${r.failed ? (r.error ?? `HTTP ${r.status}`) : `${r.ms}ms`})`),

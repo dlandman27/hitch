@@ -1902,6 +1902,48 @@ $('#report-btn').addEventListener('click', async () => {
   const res = await post('/api/report');
   toast(`Report saved: ${res.file}`, 'success');
 });
+// ---------------------------------------------------------------- asking for a name
+
+// A small sheet with one text field; resolves with the text, or null if cancelled.
+function askText({ title, hint, value, ok }) {
+  const dialog = $('#ask-dialog');
+  const input = $('#ask-input');
+  dialog.label = title;
+  $('#ask-hint').textContent = hint ?? '';
+  $('#ask-ok').textContent = ok ?? 'OK';
+  input.value = value ?? '';
+  return new Promise(resolve => {
+    let answer = null;
+    const done = text => {
+      answer = text;
+      dialog.hide();
+    };
+    const onOk = () => {
+      const text = input.value.trim();
+      if (text) done(text);
+    };
+    const onKey = e => {
+      if (e.key === 'Enter') onOk();
+    };
+    const onCancel = () => done(null);
+    $('#ask-ok').addEventListener('click', onOk);
+    $('#ask-cancel').addEventListener('click', onCancel);
+    input.addEventListener('keydown', onKey);
+    dialog.addEventListener(
+      'sl-after-hide',
+      () => {
+        $('#ask-ok').removeEventListener('click', onOk);
+        $('#ask-cancel').removeEventListener('click', onCancel);
+        input.removeEventListener('keydown', onKey);
+        resolve(answer);
+      },
+      { once: true },
+    );
+    dialog.addEventListener('sl-after-show', () => input.select?.(), { once: true });
+    dialog.show();
+  });
+}
+
 // ---------------------------------------------------------------- runs
 
 function setRun(active) {
@@ -1941,10 +1983,11 @@ $('#run-btn').addEventListener('click', async () => {
     if (res.error) toast(res.error, 'danger');
     return;
   }
-  const name = prompt('Name this run (runs with the same name are compared):', state.status?.screen ? `${state.status.screen}` : 'run');
+  const name = await askText({ title: 'Record a run', hint: 'Do the interaction in the app, then press Stop. Runs with the same name are compared with each other.', value: state.status?.screen ? `open ${state.status.screen}` : 'run', ok: 'Start recording' });
   if (!name) return;
   const res = await post('/api/run/start', { name });
   if (res.error) toast(res.error, 'danger');
+  else setRun({ name: res.name, startedAt: res.startedAt });
 });
 fetch('/api/runs')
   .then(r => r.json())
@@ -2167,6 +2210,162 @@ $('#view-threads').addEventListener('click', e => {
   if (row) showThread(row.dataset.thread);
 });
 
+// ---------------------------------------------------------------- copy a view for Claude
+
+let lastReact = null;
+const pctText = v => `${Math.round(v * 100)}%`;
+const mbText = b => (b == null ? '—' : fmtMb(b));
+
+function promptHeader(title) {
+  const st = state.status ?? {};
+  return [
+    `# Hitch: ${title}`,
+    '',
+    `From Hitch, a live performance watcher, attached to ${st.appId ?? 'the app'}${st.device ? ` on ${st.device}` : ''}${st.screen ? `, on the ${st.screen} screen` : ''}, at ${clock(Date.now())}. Measured on a dev build: absolute times are inflated, rankings are real.`,
+    '',
+  ];
+}
+
+const WHAT_TO_DO = ['', '## What to do', 'Look at this data and the app code, find what is worth fixing, and propose fixes ranked by impact. Follow the repo conventions (AGENTS.md / CLAUDE.md).'];
+
+const renderLines = renders =>
+  renders?.commits
+    ? [
+        `${renders.commits} commits, ${renders.renderMs}ms rendering, ${renders.rendered} component renders (${renders.mounts} mounts), ${renders.avoidable} avoidable.`,
+        ...renders.components.slice(0, 15).map(c => `- ${c.name} ×${c.renders}${c.mounts ? ` (${c.mounts} mounted)` : ''}, ${c.ms}ms${c.avoidable ? `, ${c.avoidable} avoidable` : ''}${c.reasons.length ? ` — ${c.reasons.map(r => `${r.text ?? r.reason} ×${r.count}`).join('; ')}` : ''}`),
+      ]
+    : ['No React commits in this window.'];
+
+const viewPrompts = {
+  async timeline() {
+    const [from, to] = viewRange();
+    const res = await fetch(`/api/prompt?from=${Math.round(from)}&to=${Math.round(to)}`).then(r => (r.ok ? r.json() : null)).catch(() => null);
+    return res?.prompt ?? null;
+  },
+  threads() {
+    const now = Date.now();
+    const from = now - state.windowSec * 1000;
+    const rows = [...state.lanes.values()]
+      .map(lane => ({ lane, avg: busyBetween(lane, from, now), now: busyBetween(lane, now - 1000, now), peak: Math.max(0, ...lane.points.filter(p => p[0] >= from).map(p => p[2])) }))
+      .filter(r => r.peak > 0.004)
+      .sort((a, b) => b.avg - a.avg);
+    const hot = state.hot.slice(-2).flatMap(h => h.threads.slice(0, 3).map(t => `- ${clock(h.at)} ${shortThreadName(t.label)} ${t.busyPct}%: ${t.categories.slice(0, 3).map(c => `${c.name} ${c.pct}%`).join(', ')}; top: ${t.frames.slice(0, 3).map(f => `${f.name} (${f.ms}ms)`).join(', ')}`));
+    return [
+      ...promptHeader(`threads over the last ${state.windowSec}s`),
+      '| thread | now | avg | peak |',
+      '|---|---|---|---|',
+      ...rows.map(r => `| ${shortThreadName(r.lane.name)} | ${pctText(r.now)} | ${pctText(r.avg)} | ${pctText(r.peak)} |`),
+      ...(hot.length ? ['', '## Latest native samples (hottest functions)', ...hot] : []),
+      ...WHAT_TO_DO,
+    ].join('\n');
+  },
+  console() {
+    const lines = [...document.querySelectorAll('#console-list .grow[data-at]')].map(row => {
+      const [time, level, text, count] = [...row.children].map(c => c.textContent.trim());
+      return `${time} ${level}: ${text.replace(/\n+/g, ' ⏎ ').slice(0, 400)}${count ? ` (${count})` : ''}`;
+    });
+    return [...promptHeader(`console (${consoleFilter.level === 'all' ? 'all levels' : consoleFilter.level}${consoleFilter.search ? `, matching "${consoleFilter.search}"` : ''})`), '```', ...lines.slice(-200), '```', ...WHAT_TO_DO].join('\n');
+  },
+  network() {
+    const slowMs = state.status?.settings?.slowRequestMs ?? 1000;
+    const requests = state.requests.slice(-80);
+    const issues = requests.filter(r => r.failed || r.ms >= slowMs);
+    const line = r => `- ${clock(r.at)} ${r.method} ${r.url.slice(0, 200)} → ${r.failed ? `failed (${r.error ?? r.status})` : r.status} in ${r.ms}ms${r.bodySize != null ? `, ${r.bodySize >= 1024 ? `${Math.round(r.bodySize / 1024)} KB` : `${r.bodySize} B`}` : ''}${r.source?.file ? ` · from ${r.source.file}:${r.source.line}` : ''}`;
+    return [
+      ...promptHeader(`network (${requests.length} recent requests)`),
+      ...(issues.length ? ['## Slow or failed', ...issues.map(line), ''] : []),
+      '## All recent requests',
+      ...requests.map(line),
+      '',
+      'Response bodies for any of these are available through the hitch_request MCP tool (by id) if you need them.',
+      ...WHAT_TO_DO,
+    ].join('\n');
+  },
+  memory() {
+    const vitals = state.vitals.filter(v => v.heapUsed > 0 || v.rss > 0);
+    if (!vitals.length) return null;
+    const first = vitals[0];
+    const last = vitals.at(-1);
+    const range = key => {
+      const vals = vitals.map(v => v[key]).filter(v => v != null);
+      return vals.length ? `${mbText(Math.min(...vals))} – ${mbText(Math.max(...vals))}` : '—';
+    };
+    const events = [
+      ...state.startups.map(st => `- ${clock(st.at)} ${st.kind}`),
+      ...state.screens.map(sc => `- ${clock(sc.at)} screen ${sc.name}`),
+      ...state.alerts.map(a => `- ${clock(a.at)} ${leakTitle(a)}`),
+    ].sort();
+    return [
+      ...promptHeader(`memory from ${clock(first.at)} to ${clock(last.at)}`),
+      `- JS heap: ${mbText(first.heapUsed)} → ${mbText(last.heapUsed)} (range ${range('heapUsed')})`,
+      `- App memory: ${mbText(first.rss)} → ${mbText(last.rss)} (range ${range('rss')})`,
+      `- Threads: ${first.threads ?? '—'} → ${last.threads ?? '—'}`,
+      ...(events.length ? ['', '## Events', ...events] : []),
+      ...(heapState.diff ? ['', `## Heap snapshot comparison (${heapState.diff.countDelta >= 0 ? '+' : ''}${heapState.diff.countDelta} objects)`, ...heapState.diff.grew.slice(0, 20).map(g => `- ${g.name}: +${g.count} objects, +${Math.round(g.size / 1024)} KB`)] : []),
+      ...WHAT_TO_DO,
+    ].join('\n');
+  },
+  react() {
+    const data = lastReact;
+    if (!data) return null;
+    const commits = data.commits.filter(c => c.at >= Date.now() - 120000);
+    const slow = commits.filter(c => c.ms >= 16);
+    return [
+      ...promptHeader('React rendering'),
+      `## Commits in the last 2 minutes`,
+      `${commits.length} commits, ${Math.round(commits.reduce((sum, c) => sum + c.ms, 0))}ms rendering; ${slow.length} took longer than a frame (16ms), the longest ${Math.round(Math.max(0, ...commits.map(c => c.ms)))}ms.`,
+      '',
+      '## Where render time went (last 2 minutes)',
+      ...renderLines(data.summary),
+      ...(data.avoidable.length ? ['', '## Avoidable re-renders during freezes this session', ...data.avoidable.slice(0, 15).map(a => `- ${a.name}: ${a.avoidable} of ${a.renders} renders — ${a.reason}`)] : []),
+      ...WHAT_TO_DO,
+    ].join('\n');
+  },
+  async runs() {
+    const data = await fetch('/api/runs').then(r => (r.ok ? r.json() : null)).catch(() => null);
+    if (!data?.runs.length) return null;
+    return [
+      ...promptHeader('recorded runs'),
+      '| run | when | branch | JS blocked | freezes | choppy | errors | screens |',
+      '|---|---|---|---|---|---|---|---|',
+      ...data.runs.map(r => `| ${r.name} | ${r.startedAt} | ${r.git?.branch ?? ''}@${r.git?.commit ?? ''} | ${r.summary.blockedMs}ms | ${r.summary.stalls} | ${r.summary.jankSeconds}s | ${r.summary.errors} | ${r.summary.screens.map(sc => `${sc.name} ${(sc.ms / 1000).toFixed(1)}s`).join(', ')} |`),
+      '',
+      'Runs with the same name are the same interaction; compare them to judge whether a change helped.',
+      ...WHAT_TO_DO,
+    ].join('\n');
+  },
+};
+
+async function copyView() {
+  const text = await viewPrompts[state.view]?.();
+  if (!text) {
+    toast('Nothing to copy in this view yet.', 'warning');
+    return;
+  }
+  await navigator.clipboard.writeText(text);
+  toast(`Copied the ${state.view} view as a prompt. Paste it to Claude.`, 'success');
+}
+// The copy button sits at the right of each view's title row: the first
+// heading, or the toolbar row for Console and the bottom bar for Timeline.
+function copyButtonFor() {
+  const button = el('button', 'tb-btn view-copy', '<sl-icon name="clipboard-data"></sl-icon><span>Copy for Claude</span>');
+  button.type = 'button';
+  button.title = 'Copy this view as a prompt for Claude (⇧⌘C)';
+  button.addEventListener('click', copyView);
+  return button;
+}
+function placeCopyButton(view) {
+  const node = $(`#view-${view}`);
+  const host = view === 'timeline' ? node.querySelector('.threads-foot') : view === 'console' ? node.querySelector('.view-tools') : node.querySelector('.view-body > h3');
+  if (host && !host.querySelector('.view-copy')) host.append(copyButtonFor());
+}
+document.addEventListener('keydown', e => {
+  if (e.key.toLowerCase() === 'c' && e.metaKey && e.shiftKey) {
+    e.preventDefault();
+    copyView();
+  }
+});
+
 // ---------------------------------------------------------------- views
 
 const VIEWS = ['timeline', 'threads', 'console', 'network', 'memory', 'react', 'runs'];
@@ -2181,6 +2380,7 @@ function setView(view) {
   clearInterval(viewTimer);
   if (view === 'timeline') {
     layoutAt = 0;
+    placeCopyButton('timeline');
     return;
   }
   refreshView(view);
@@ -2193,6 +2393,7 @@ async function refreshView(view) {
   const node = $(`#view-${view}`);
   const scrolled = node.querySelector('.view-body')?.scrollTop ?? 0;
   await viewRenderers[view]();
+  placeCopyButton(view);
   const body = node.querySelector('.view-body');
   if (body && body.scrollTop !== scrolled) body.scrollTop = scrolled;
 }
@@ -2410,7 +2611,7 @@ viewRenderers.memory = () => {
     }
   </div>`;
   $('#heap-take').addEventListener('click', async () => {
-    const label = prompt('Name this snapshot (e.g. "before"):', heapState.snapshots.length ? 'after' : 'before');
+    const label = await askText({ title: 'Take a heap snapshot', hint: 'The app freezes for a few seconds while the snapshot is written.', value: heapState.snapshots.length ? 'after' : 'before', ok: 'Take snapshot' });
     if (!label) return;
     heapState.busy = true;
     viewRenderers.memory();
@@ -2447,7 +2648,8 @@ function markLines(marks, x, H) {
 // React: commits over time, where render time went, and avoidable re-renders.
 viewRenderers.react = async () => {
   const view = $('#view-react');
-  const data = await fetch('/api/react?seconds=60').then(r => (r.ok ? r.json() : null)).catch(() => null);
+  const data = await fetch('/api/react?seconds=120').then(r => (r.ok ? r.json() : null)).catch(() => null);
+  lastReact = data;
   if (state.view !== 'react') return;
   if (!data) {
     view.innerHTML = emptyView('Restart Hitch to use this view', 'This view needs data from a newer Hitch than the one running. Quit and reopen Hitch.app (or restart hitch in the terminal).');
@@ -2484,7 +2686,7 @@ viewRenderers.react = async () => {
       </svg>
       <div class="legend-row"><span>Each bar is one commit: how long React spent rendering it.</span><span><i style="background:${COLORS.stall}"></i>over a frame (16ms)</span><span><i style="background:${COLORS.severe}"></i>over 50ms</span></div>
     </div>`;
-  const summary = rendersSection(data.summary, 'Where render time went', 'last 60 seconds');
+  const summary = rendersSection(data.summary, 'Where render time went', 'last 2 minutes');
   if (summary) body.append(summary);
   if (data.avoidable.length) {
     const node = section('Avoidable re-renders', 'during freezes this session');
@@ -2543,6 +2745,8 @@ viewRenderers.runs = async () => {
     </div></div>`;
 };
 
+placeCopyButton('timeline');
+placeCopyButton('console');
 setInterval(trimLanes, 5000);
 connect();
 requestAnimationFrame(draw);

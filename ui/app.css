@@ -2360,3 +2360,52 @@ sl-tooltip::part(body) {
 .detail .thread-card {
   cursor: default;
 }
+
+/* Copy for Claude: at the right end of each view's title row. */
+.view-body > h3 {
+  display: flex;
+  align-items: baseline;
+}
+
+.view-copy {
+  flex-shrink: 0;
+  height: 26px;
+  margin-left: auto;
+  padding: 0 10px;
+  border-radius: 7px;
+  background: var(--capsule);
+  color: var(--label-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.view-body > h3 .view-copy {
+  align-self: center;
+}
+
+.threads-foot .view-copy {
+  margin-left: 12px;
+}
+
+@container threads (max-width: 620px) {
+  .view-copy span {
+    display: none;
+  }
+}
+
+/* Sheets (naming a run or a snapshot, run results). */
+sl-dialog::part(panel) {
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 12px;
+  background: #2c2c2e;
+  box-shadow: 0 20px 50px rgb(0 0 0 / 0.5);
+}
+
+sl-dialog::part(title) {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+sl-dialog::part(overlay) {
+  background: rgb(0 0 0 / 0.35);
+}

@@ -251,6 +251,13 @@
     </sl-drawer>
 
     <script type="module" src="/app.js"></script>
+    <!-- Asks for a name (a run, a heap snapshot). WebKit in Hitch.app has no window.prompt. -->
+    <sl-dialog id="ask-dialog" label="Name">
+      <p id="ask-hint" class="d-hint" style="margin-top:0"></p>
+      <sl-input id="ask-input" autofocus></sl-input>
+      <sl-button slot="footer" id="ask-cancel">Cancel</sl-button>
+      <sl-button slot="footer" variant="primary" id="ask-ok">OK</sl-button>
+    </sl-dialog>
     <sl-dialog id="run-dialog" label="Run">
       <div id="run-result"></div>
       <sl-button slot="footer" variant="primary" id="run-dialog-close">Done</sl-button>
