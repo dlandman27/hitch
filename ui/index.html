@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en" class="sl-theme-dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hitch</title>
+    <link rel="icon" href="/brand/hitch-icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/brand/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0b0f14" />
+    <!-- Shoelace design system (https://shoelace.style) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/themes/dark.css" />
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/shoelace-autoloader.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand" title="Hitch: live slowdown watcher">
+        <img class="brand-mark" src="/brand/hitch-mark.svg" alt="" />
+        <span class="wordmark">hitch</span>
+      </div>
+
+      <span class="topbar-rule" aria-hidden="true"></span>
+
+      <sl-dropdown id="target-menu" distance="8" hoist>
+        <button slot="trigger" class="target-trigger" type="button">
+          <span class="conn-dot" id="conn-dot"></span>
+          <span class="target-text">
+            <span class="target-project" id="target-project">Looking for Metro…</span>
+            <span class="target-sub">
+              <span class="conn-state" id="conn"><span id="conn-state">Connecting…</span></span>
+              <span class="target-app" id="conn-app"></span>
+            </span>
+          </span>
+          <sl-icon name="chevron-expand" class="target-caret"></sl-icon>
+        </button>
+        <sl-menu id="target-list"></sl-menu>
+      </sl-dropdown>
+
+      <div class="vitals" id="vitals"></div>
+
+      <div class="toolbar">
+        <sl-radio-group id="window-select" size="small" value="30" label="Time window">
+          <sl-radio-button value="15">15s</sl-radio-button>
+          <sl-radio-button value="30">30s</sl-radio-button>
+          <sl-radio-button value="60">1m</sl-radio-button>
+          <sl-radio-button value="180">3m</sl-radio-button>
+        </sl-radio-group>
+        <div class="tool-group">
+          <sl-tooltip content="Freeze the lanes (P)">
+            <sl-button id="pause-btn" size="small" variant="text"><sl-icon slot="prefix" name="pause-fill"></sl-icon><span>Pause</span></sl-button>
+          </sl-tooltip>
+          <sl-tooltip content="Sample every native thread for 1 second">
+            <sl-button id="sample-btn" size="small" variant="text"><sl-icon slot="prefix" name="cpu"></sl-icon>Sample</sl-button>
+          </sl-tooltip>
+          <sl-tooltip content="Record a named run of an interaction (open a screen, scroll). When you stop, Hitch saves its numbers and compares them with the last run of the same name." id="run-tip">
+            <sl-button id="run-btn" size="small" variant="text"><sl-icon slot="prefix" name="record-circle"></sl-icon><span>Record run</span></sl-button>
+          </sl-tooltip>
+          <sl-tooltip content="Clear everything shown: events, thread lanes, memory, network and console. Hitch keeps watching.">
+            <sl-button id="reset-btn" size="small" variant="text"><sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon>Reset</sl-button>
+          </sl-tooltip>
+        </div>
+        <sl-tooltip content="Settings">
+          <sl-icon-button id="settings-btn" name="sliders2" label="Settings"></sl-icon-button>
+        </sl-tooltip>
+      </div>
+    </header>
+
+    <sl-split-panel id="split" position="66" class="layout">
+      <sl-icon slot="divider" name="grip-vertical"></sl-icon>
+
+      <section slot="start" class="threads" aria-label="Threads">
+        <div class="section-head">
+          <h2>Threads</h2>
+          <sl-badge variant="neutral" pill id="thread-count">0</sl-badge>
+          <sl-tooltip hoist content="Every thread in the app, live. Each bar is how busy that thread was over 50ms, measured from your Mac with nothing running inside the app. Hover a name to see what that thread does. Click a marked freeze or shaded area to see what was running.">
+            <sl-icon name="info-circle" class="info-i"></sl-icon>
+          </sl-tooltip>
+          <div class="spacer"></div>
+          <div class="legend" id="legend"></div>
+        </div>
+        <sl-alert id="phone-note" variant="primary" hidden>
+          <sl-icon slot="icon" name="phone"></sl-icon><span></span>
+        </sl-alert>
+        <sl-alert id="stale-alert" variant="warning" hidden>
+          <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+          <strong>The app is running an older JS bundle than Metro.</strong> Code lines may point at the wrong place until it reloads.
+          <sl-button id="reload-btn" size="small" variant="warning" slot="" style="margin-left: var(--sl-spacing-small)"><sl-icon slot="prefix" name="arrow-clockwise"></sl-icon>Reload app</sl-button>
+        </sl-alert>
+        <sl-alert id="map-alert" variant="warning" hidden>
+          <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+          <strong>Hitch's source map doesn't match the bundle the app is running.</strong> Metro may still be rebuilding after a pull or branch switch; Hitch keeps checking. Until it matches, your own files and lines in findings may be wrong (library frames are fine).
+        </sl-alert>
+        <div class="lanes-wrap" id="lanes-wrap">
+          <canvas id="lanes"></canvas>
+          <div class="hover-tip" id="hover-tip" hidden></div>
+          <sl-alert id="lanes-empty" variant="primary" hidden>
+            <sl-icon slot="icon" name="info-circle"></sl-icon> Thread lanes need the app running in the iOS simulator.
+          </sl-alert>
+        </div>
+      </section>
+
+      <aside slot="end" class="inspector" aria-label="Captured events">
+        <div class="panel" id="list-panel">
+          <div class="section-head">
+            <h2>Captured</h2>
+            <sl-badge variant="neutral" pill id="event-count">0</sl-badge>
+            <sl-tooltip hoist content="Everything Hitch caught while you used the app, newest first: JS freezes, threads running hot, console errors and warnings, slow or failed requests, startups and leaks. Click one to see what was happening and hand it to an AI.">
+              <sl-icon name="info-circle" class="info-i"></sl-icon>
+            </sl-tooltip>
+            <div class="spacer"></div>
+            <sl-select id="filter" size="small" value="all" hoist>
+              <sl-option value="all">Everything</sl-option>
+              <sl-option value="stall">JS freezes</sl-option>
+              <sl-option value="hot">Hot threads</sl-option>
+              <sl-option value="console">Console errors &amp; warnings</sl-option>
+              <sl-option value="console-error">Console errors only</sl-option>
+              <sl-option value="console-warn">Console warnings only</sl-option>
+              <sl-option value="request">Slow &amp; failed requests</sl-option>
+              <sl-option value="startup">Startups</sl-option>
+              <sl-option value="leak">Leaks</sl-option>
+              <sl-option value="jank">Choppy frames</sl-option>
+              <sl-option value="screen">Screen loads</sl-option>
+              <sl-divider></sl-divider>
+              <sl-option value="no-dev">Everything except dev-only tooling</sl-option>
+            </sl-select>
+          </div>
+          <div class="search-bar">
+            <sl-input id="search" size="small" type="search" placeholder="Search messages, URLs, functions, files" clearable>
+              <sl-icon slot="prefix" name="search"></sl-icon>
+            </sl-input>
+          </div>
+          <div class="events" id="events"></div>
+          <div class="events-empty" id="events-nomatch" hidden>
+            <p class="lead">Nothing matches</p>
+            <p>Change the filter or search to see more.</p>
+          </div>
+          <div class="events-empty" id="events-empty">
+            <sl-spinner></sl-spinner>
+            <p class="lead">Watching your app</p>
+            <p>Use it normally. Anything that freezes the JS thread or runs a thread hot lands here, pinned to the line of code responsible.</p>
+          </div>
+        </div>
+
+        <div class="panel detail" id="detail-panel" hidden>
+          <div class="detail-scroll" id="detail"></div>
+          <footer class="actions">
+            <sl-button variant="primary" id="handoff-btn"><sl-icon slot="prefix" name="stars"></sl-icon>Send to Claude Code</sl-button>
+            <sl-tooltip content="Copy a complete fix prompt for any AI agent">
+              <sl-button id="copy-btn"><sl-icon slot="prefix" name="clipboard"></sl-icon>Copy prompt</sl-button>
+            </sl-tooltip>
+            <sl-tooltip content="Open the culprit line in your editor">
+              <sl-icon-button id="editor-btn" name="box-arrow-up-right" label="Open in editor"></sl-icon-button>
+            </sl-tooltip>
+          </footer>
+        </div>
+      </aside>
+    </sl-split-panel>
+
+    <sl-drawer id="settings" label="Settings" placement="end">
+      <div class="settings-form">
+        <sl-input id="set-stall" type="number" label="JS freeze threshold" help-text="Report the JS thread being busy at least this long." min="16" step="10">
+          <span slot="suffix">ms</span>
+        </sl-input>
+        <sl-input id="set-ui" type="number" label="UI thread hot" help-text="Sample native threads when the UI thread stays this busy for 1s." min="5" max="100" step="5">
+          <span slot="suffix">%</span>
+        </sl-input>
+        <sl-input id="set-thread" type="number" label="Any thread hot" help-text="Same, for any other thread." min="5" max="100" step="5">
+          <span slot="suffix">%</span>
+        </sl-input>
+        <sl-input id="set-slow" type="number" label="Slow request" help-text="Flag network requests that take at least this long." min="100" step="100">
+          <span slot="suffix">ms</span>
+        </sl-input>
+      </div>
+      <div slot="footer" class="drawer-footer">
+        <sl-button id="report-btn"><sl-icon slot="prefix" name="file-earmark-text"></sl-icon>Save report</sl-button>
+        <sl-button id="clear-btn" variant="danger" outline><sl-icon slot="prefix" name="trash"></sl-icon>Clear events</sl-button>
+      </div>
+    </sl-drawer>
+
+    <script type="module" src="/app.js"></script>
+    <sl-dialog id="run-dialog" label="Run">
+      <div id="run-result"></div>
+      <sl-button slot="footer" variant="primary" id="run-dialog-close">Done</sl-button>
+    </sl-dialog>
+  </body>
+</html>

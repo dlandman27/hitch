@@ -1,0 +1,15 @@
+{
+  "name": "hitch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Live slowdown watcher for React Native dev sessions: JS stalls and hot native threads, pinned to file:line.",
+  "bin": { "hitch": "./index.mjs" },
+  "scripts": { "test": "node --test" },
+  "engines": { "node": ">=22" },
+  "license": "MIT",
+  "author": "Dylan Landman",
+  "repository": { "type": "git", "url": "git+https://github.com/dlandman27/hitch.git" },
+  "homepage": "https://github.com/dlandman27/hitch#readme",
+  "bugs": { "url": "https://github.com/dlandman27/hitch/issues" }
+}

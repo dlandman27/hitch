@@ -1,0 +1,1756 @@
+// Hitch UI: live thread lanes + captured slowdowns + AI hand-off.
+
+const $ = sel => document.querySelector(sel);
+const el = (tag, cls, html) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (html !== undefined) node.innerHTML = html;
+  return node;
+};
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const clock = at => new Date(at).toTimeString().slice(0, 8);
+const ago = at => {
+  const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  return clock(at);
+};
+
+// Every color and font comes from the Shoelace theme tokens. The theme loads
+// from a CDN, and WebKit (Hitch.app) can run this before it arrives on a cold
+// cache, so read the tokens again once every stylesheet has loaded.
+const T = name => getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim();
+const COLORS = {};
+const INK = {};
+const CATEGORY_COLORS = {};
+let FONT_SANS = '';
+let FONT_MONO = '';
+
+function readTheme() {
+  Object.assign(COLORS, {
+    js: T('lane-js'),
+    ui: T('lane-ui'),
+    gc: T('lane-gc'),
+    sdk: T('lane-sdk'),
+    net: T('lane-net'),
+    other: T('lane-other'),
+    stall: T('freeze'),
+    severe: T('freeze-severe'),
+    hot: T('sampled'),
+  });
+  Object.assign(INK, {
+    text: T('sl-color-neutral-900'),
+    label: T('sl-color-neutral-700'),
+    muted: T('sl-color-neutral-500'),
+    grid: T('sl-color-neutral-100'),
+    track: T('sl-color-neutral-50'),
+    rule: T('sl-color-neutral-100'),
+  });
+  FONT_SANS = T('sl-font-sans');
+  FONT_MONO = T('sl-font-mono');
+  Object.assign(CATEGORY_COLORS, {
+    'Yoga layout': T('sl-color-sky-400'),
+    'Text layout': T('sl-color-cyan-300'),
+    'Hermes GC': COLORS.gc,
+    'Reanimated / worklets': T('sl-color-fuchsia-400'),
+    Images: T('sl-color-yellow-400'),
+    'Firestore / gRPC': COLORS.net,
+    'Analytics SDKs': COLORS.sdk,
+    Network: T('sl-color-emerald-400'),
+    'React mounting / shadow tree': T('sl-color-green-400'),
+    'Hermes JS execution': COLORS.js,
+    'CoreAnimation / render': T('sl-color-rose-400'),
+    UIKit: T('sl-color-indigo-300'),
+    Other: COLORS.other,
+  });
+  $('#legend').innerHTML = [
+    ['JS', COLORS.js],
+    ['UI', COLORS.ui],
+    ['GC', COLORS.gc],
+    ['SDKs', COLORS.sdk],
+    ['Network / Firestore', COLORS.net],
+    ['Freeze', COLORS.stall],
+    ['Sampled', COLORS.hot],
+  ]
+    .map(([label, color]) => `<span><i style="background:${color}"></i>${label}</span>`)
+    .join('');
+}
+readTheme();
+if (document.readyState !== 'complete') addEventListener('load', readTheme, { once: true });
+
+const SEVERE_MS = 100;
+
+// Plain-language explanations behind every (i).
+const ROW_INFO = {
+  'Main/UI thread':
+    'The iOS main thread. It handles touches, layout (Yoga), updating native views and native-driven animations. When it is busy the screen cannot draw, so scrolling and animations stutter. Measured as CPU time every 50ms from your Mac; nothing runs inside the app.',
+  'JS thread':
+    'Runs your JavaScript: React renders, state updates, Redux, effects and network callbacks. When it is pegged, taps and JS animations freeze. Busy stretches over the freeze threshold are boxed, and Hitch grabs the stack to show the line responsible.',
+  'Hermes GC (hades)':
+    "Hermes' garbage-collector threads. Spikes mean the app is creating lots of short-lived objects (allocation churn), often from re-renders building new arrays and objects every time.",
+  network:
+    "Each XHR request (axios, React Native's XMLHttpRequest) drawn from send to finish. Teal is fine, amber is slower than your threshold, red failed. Expo replaces the global fetch with a native one the app does not report, so fetch and RTK Query calls do not appear here.",
+  console:
+    'Triangles are console.warn, console.error and uncaught exceptions from the app, at the moment they happened, with the line that logged them. Repeats of the same message (even with different ids or numbers in it) are grouped with a count. Faint ticks are plain console.log / info / debug lines; hover one to read it.',
+  memory:
+    'Green is the JS heap (memory used by JavaScript objects, from the debugger every 2s). Blue is total app memory (from your Mac, simulator only). Each line is scaled to its own range so slow climbs stand out. Red marks are leak warnings.',
+};
+
+function threadInfo(name) {
+  if (ROW_INFO[name]) return ROW_INFO[name];
+  if (name === 'unnamed threads (pool)') return 'Unnamed worker threads from iOS\'s shared thread pool (GCD), merged into one row. Several run at once, so this row can go above 100%. Bursts usually mean background work like decoding, disk I/O or SDK processing.';
+  if (/datadog|dd-react|sentry|crashlytics|amplitude|segment|intercom|appsflyer|braze/i.test(name)) return `A background thread owned by an SDK (${shortThreadName(name)}). It costs CPU and battery but does not block the screen directly; steady activity here is SDK overhead.`;
+  if (/NSURLSession|CFNetwork|network|socket/i.test(name)) return 'iOS networking. It does the actual network I/O for requests, including native SDK traffic the Network row cannot see.';
+  if (/firestore|grpc|firebase/i.test(name)) return 'Firebase / Firestore background work: listeners, syncing and gRPC traffic.';
+  return 'A background native thread, shown because it used CPU in this window. The % is CPU time over the last second. Background threads do not freeze the UI directly, but they compete for the same CPU.';
+}
+
+const VITAL_INFO = {
+  'JS heap': 'Memory used by JavaScript objects in Hermes, read from the debugger every 2 seconds. If it keeps rising after you leave screens, something is being kept alive (a leak).',
+  'App memory': 'Total memory of the app process (resident size), read from your Mac every 2 seconds. Includes native memory such as images and SDKs. Simulator only.',
+  Threads: 'Number of OS threads in the app. It should stay roughly flat; steady growth means something keeps spawning threads without ending them.',
+  'Last reload': 'Time from the JS reload until the first screen started rendering, then until the JS and UI threads went quiet.',
+  'Cold launch': 'Time from the app process starting until the first screen started rendering, then until the JS and UI threads went quiet.',
+};
+
+const EVENT_INFO = {
+  stall: 'The JS thread was busy without a break for at least your freeze threshold. While that happens, taps, scrolling and JS animations do not respond. Hitch pauses the app for an instant during the freeze to read what code is running, so you see the actual function and line.',
+  hot: 'A native thread stayed busy (the UI thread at your threshold, or any thread at 90%) for a full second, so Hitch sampled every native thread for 1 second to see which functions were burning the CPU.',
+  console: 'A console.warn, console.error or uncaught exception from the app, with the line of your code that logged it. React warnings land here too. Repeats of the same message are grouped even when ids or numbers in it change; the plain console.log lines just before it are listed below.',
+  request: 'An XHR request that failed or took longer than your slow-request threshold. Anything waiting on it was stuck that long.',
+  startup: 'Timing of a cold launch or JS reload: until the first screen started rendering, then until the app settled (JS and UI threads quiet for 1 second).',
+  leak: 'Memory kept climbing for 3 minutes, measured at its lowest point after each garbage collection so normal ups and downs do not count. That pattern usually means something is never released.',
+  threadleak: 'The number of OS threads kept climbing for 3 minutes. Something is creating threads and never ending them.',
+  jank: 'Frames dropped on the JS thread while React was busy, beyond what individual freezes explain: many small hitches that each stay under the freeze threshold but together make scrolling or animations choppy. Counted by a tiny probe Hitch adds through the debugger.',
+  screen: 'How long a screen took to settle after navigating to it: from the screen change until a full second passes without React re-rendering. Includes data loading and every render as results arrive.',
+};
+
+const info = text => `<sl-tooltip content="${esc(text)}" hoist><sl-icon name="info-circle" class="info-i"></sl-icon></sl-tooltip>`;
+const PINNED = ['Main/UI thread', 'JS thread', 'Hermes GC (hades)'];
+const LIVE_MS = 1000;
+const HISTORY_MS = 185000;
+
+const state = {
+  coverage: [],
+  vitals: [],
+  requests: [],
+  consoleEvents: [],
+  logs: [],
+  search: '',
+  startups: [],
+  alerts: [],
+  jank: [],
+  screens: [],
+  run: null,
+  servers: [],
+  current: null,
+  status: null,
+  stalls: [],
+  hot: [],
+  lanes: new Map(),
+  windowSec: 30,
+  paused: false,
+  pausedAt: 0,
+  selectedId: null,
+  filter: 'all',
+  showIdle: false,
+  hover: null,
+};
+
+function laneColor(name) {
+  if (name === 'JS thread') return COLORS.js;
+  if (name === 'Main/UI thread') return COLORS.ui;
+  if (/hades|Hermes GC/i.test(name)) return COLORS.gc;
+  if (/datadog|amplitude|segment|sentry|crashlytics|intercom|appsflyer|dd-react|braze/i.test(name)) return COLORS.sdk;
+  if (/firestore|firebase|grpc|network|socket|cfnetwork|nsurl|http/i.test(name)) return COLORS.net;
+  return COLORS.other;
+}
+
+function shortThreadName(name) {
+  return name.replace(/^DispatchQueue_\d+:\s*/, '').replace(/\s+\(serial\)$/, '').replace(/^com\.(apple|google|facebook|datadoghq)\./, '');
+}
+
+// ---------------------------------------------------------------- data in
+
+function addLanes(event) {
+  for (const [name, busy] of event.lanes) {
+    let lane = state.lanes.get(name);
+    if (!lane) {
+      lane = { name, color: laneColor(name), points: [] };
+      state.lanes.set(name, lane);
+    }
+    lane.points.push([event.at, event.windowMs, Math.min(1, busy / event.windowMs)]);
+  }
+}
+
+function trimLanes() {
+  const cutoff = Date.now() - HISTORY_MS;
+  for (const lane of state.lanes.values()) {
+    let i = 0;
+    while (i < lane.points.length && lane.points[i][0] < cutoff) i++;
+    if (i) lane.points.splice(0, i);
+  }
+}
+
+function connect() {
+  const source = new EventSource('/events');
+  source.onmessage = message => {
+    const event = JSON.parse(message.data);
+    if (event.type === 'snapshot') {
+      state.stalls = event.stalls;
+      state.hot = event.hot;
+      state.vitals = event.vitals ?? [];
+      state.requests = event.requests ?? [];
+      state.consoleEvents = event.console ?? [];
+      state.logs = event.logs ?? [];
+      state.startups = event.startups ?? [];
+      state.alerts = event.alerts ?? [];
+      state.jank = event.jank ?? [];
+      state.screens = event.screens ?? [];
+      state.coverage = event.coverage ?? [];
+      renderVitals();
+      state.lanes.clear();
+      event.lanes.forEach(addLanes);
+      setStatus(event.status);
+      if (event.servers) setServers(event);
+      showList();
+      renderEvents();
+      const linked = Number(location.hash.match(/event=(\d+)/)?.[1]);
+      if (linked && !state.selectedId) select(linked);
+    } else if (event.type === 'status') {
+      setStatus(event);
+    } else if (event.type === 'servers') {
+      setServers(event);
+    } else if (event.type === 'lanes') {
+      addLanes(event);
+    } else if (event.type === 'stall') {
+      state.stalls.push(event);
+      renderEvents();
+    } else if (event.type === 'hot') {
+      state.hot.push(event);
+      renderEvents();
+    } else if (event.type === 'coverage') {
+      state.coverage.push(event);
+    } else if (event.type === 'vitals') {
+      state.vitals.push(event);
+      if (state.vitals.length > 1800) state.vitals.shift();
+      renderVitals();
+    } else if (event.type === 'request') {
+      state.requests.push(event);
+      if (state.requests.length > 1000) state.requests.shift();
+      if (event.issue) renderEvents();
+    } else if (event.type === 'console') {
+      // Repeats of the same message come back with the same id and a higher count.
+      const i = state.consoleEvents.findIndex(e => e.id === event.id);
+      if (i >= 0) state.consoleEvents[i] = event;
+      else state.consoleEvents.push(event);
+      renderEvents();
+      if (state.selectedId === event.id) renderDetail(event);
+    } else if (event.type === 'logs') {
+      // Repeats update an entry already shown, which is always near the end.
+      for (const entry of event.entries) {
+        const i = state.logs.findLastIndex((l, k) => k >= state.logs.length - 50 && l.id === entry.id);
+        if (i >= 0) state.logs[i] = entry;
+        else state.logs.push(entry);
+      }
+      if (state.logs.length > 2000) state.logs.splice(0, state.logs.length - 2000);
+    } else if (event.type === 'startup') {
+      state.startups.push(event);
+      renderEvents();
+      renderVitals();
+    } else if (event.type === 'leak' || event.type === 'threadleak') {
+      state.alerts.push(event);
+      renderEvents();
+    } else if (event.type === 'jank') {
+      // A choppy period can grow while it continues: same id, longer span.
+      const i = state.jank.findIndex(j => j.id === event.id);
+      if (i >= 0) state.jank[i] = event;
+      else state.jank.push(event);
+      renderEvents();
+      if (state.selectedId === event.id) renderDetail(event);
+    } else if (event.type === 'screen') {
+      state.screens.push(event);
+      renderEvents();
+    } else if (event.type === 'run') {
+      setRun(event.active);
+      if (event.finished) showRunResult(event.finished);
+    } else if (event.type === 'cleared') {
+      state.coverage = [];
+      state.lanes.clear();
+      state.vitals = [];
+      renderVitals();
+      layoutAt = 0;
+      state.stalls = [];
+      state.hot = [];
+      state.requests = [];
+      state.consoleEvents = [];
+      state.logs = [];
+      state.startups = [];
+      state.alerts = [];
+      state.jank = [];
+      state.screens = [];
+      state.selectedId = null;
+      renderEvents();
+      showList();
+    }
+  };
+  source.onerror = () => setStatus({ ...(state.status ?? {}), state: 'server-down' });
+}
+
+const STATE_LABEL = { 'no-server': 'No Metro running', replay: 'Saved session', live: 'Live', connecting: 'Connecting…', 'no-app': 'Waiting for app', disconnected: 'Reconnecting…', 'server-down': 'Hitch stopped' };
+
+function setStatus(status) {
+  // Another app took over Metro: its threads are a different process.
+  if (state.status?.appId && status.appId && status.appId !== state.status.appId) state.lanes.clear();
+  state.status = status;
+  $('#conn').dataset.state = status.state;
+  $('#conn-state').textContent = STATE_LABEL[status.state] ?? status.state;
+  $('#conn-dot').dataset.state = status.state;
+  $('#conn-app').textContent = status.appId ? `${status.appId}${status.device ? ` · ${status.device}` : ''}${status.screen ? ` · ${status.screen}` : ''}` : '';
+  const mismatch = status.health?.symbols === 'mismatch';
+  $('#map-alert').hidden = !mismatch;
+  $('#map-alert').open = mismatch;
+  renderTargetLabel();
+  if (status.settings && !document.activeElement?.closest?.('sl-input')) {
+    $('#set-stall').value = status.settings.stallMs;
+    $('#set-ui').value = status.settings.uiHot;
+    $('#set-thread').value = status.settings.threadHot;
+    $('#set-slow').value = status.settings.slowRequestMs ?? 1000;
+  }
+  for (const id of ['#pause-btn', '#sample-btn', '#reset-btn']) $(id).closest('sl-tooltip').hidden = status.state === 'replay';
+  $('#stale-alert').hidden = !status.bundleStale;
+  $('#stale-alert').open = Boolean(status.bundleStale);
+  const empty = $('#lanes-empty');
+  empty.hidden = !(status.state === 'live' && !status.native);
+  empty.open = !empty.hidden;
+  empty.lastChild.textContent = status.physical
+    ? ' Physical device: per-thread lanes need the simulator. The JS lane shows responsiveness, and freezes are captured on the right.'
+    : ' Thread lanes need the app running in the iOS simulator. JS freezes are still captured on the right.';
+  const phoneNote = $('#phone-note');
+  phoneNote.hidden = !status.release;
+  phoneNote.open = Boolean(status.release);
+  if (status.release) {
+    const behind = status.lastDataAt ? Math.round((Date.now() - status.lastDataAt) / 1000) : null;
+    phoneNote.querySelector('span').textContent = status.waitingForForeground
+      ? 'Waiting for ALPHA to be open on your iPhone. Unlock the phone and open the app; streaming starts automatically (the profiler can only attach to an app that is running in the foreground).'
+      : `Streaming from your iPhone (Release build). Apple's profiler records the phone in back-to-back ${status.settings?.chunkSec ?? 20}s chunks and each one is replayed onto the lanes at its real time, so data arrives about ${(status.settings?.chunkSec ?? 20) + 5}s behind${behind != null ? ` (latest data ${behind}s ago)` : ', first chunk on its way'}. Hatched stretches are the few seconds between chunks that couldn't be recorded. JS stacks, console, network and memory aren't available in Release builds.`;
+  }
+}
+
+// ---------------------------------------------------------------- vitals
+
+function trend(key) {
+  const now = state.vitals.at(-1)?.at ?? 0;
+  const old = state.vitals.find(v => now - v.at <= 120000 && v[key] != null);
+  const last = state.vitals.at(-1)?.[key];
+  if (!old || last == null || now - old.at < 30000) return '';
+  const diff = last - old[key];
+  if (key === 'threads') return diff ? ` (${diff > 0 ? '+' : ''}${diff} in 2m)` : '';
+  return Math.abs(diff) >= 5 * MB ? ` (${diff > 0 ? '+' : '−'}${fmtMb(Math.abs(diff))} in 2m)` : '';
+}
+
+function renderVitals() {
+  const v = state.vitals.at(-1);
+  const startup = state.startups.at(-1);
+  const chips = [];
+  if (v?.heapUsed != null) chips.push(['JS heap', `${fmtMb(v.heapUsed)}${trend('heapUsed')}`]);
+  if (v?.rss != null) chips.push(['App memory', `${fmtMb(v.rss)}${trend('rss')}`]);
+  if (v?.threads != null) chips.push(['Threads', `${v.threads}${trend('threads')}`]);
+  if (startup) {
+    const total = startup.toSettleMs ?? startup.toJsMs;
+    chips.push([startup.kind === 'reload' ? 'Last reload' : 'Cold launch', total != null ? `${(total / 1000).toFixed(1)}s` : '—']);
+  }
+  $('#vitals').innerHTML = chips
+    .map(([k, val]) => {
+      const [value, change] = val.split(' (');
+      const delta = change ? `<span class="vd${change.startsWith('+') ? ' up' : ''}">${esc(change.slice(0, -1))}</span>` : '';
+      return `<sl-tooltip content="${esc(VITAL_INFO[k] ?? '')}" hoist><span class="vital"><span class="vk">${k}</span><span class="vv">${esc(value)}${delta}</span></span></sl-tooltip>`;
+    })
+    .join('');
+}
+
+// ---------------------------------------------------------------- servers
+
+const basename = p => p?.split('/').filter(Boolean).pop() ?? '';
+
+function renderTargetLabel() {
+  const replay = state.status?.state === 'replay';
+  const server = state.servers.find(s => s.url === state.current?.metro);
+  const phone = state.current?.phone ? (state.phones ?? []).find(p => p.udid === state.current.phone) : null;
+  $('#target-project').textContent = replay ? 'Saved session' : phone ? `📱 ${phone.name}` : server ? server.name : state.current ? basename(state.current.project) : 'Looking for Metro…';
+}
+
+function setServers({ servers, phones, current }) {
+  state.servers = servers;
+  state.phones = phones ?? [];
+  state.current = current;
+  renderTargetLabel();
+  const menu = $('#target-list');
+  if (state.status?.state === 'replay') {
+    menu.innerHTML = '<sl-menu-item disabled>Reviewing a saved session</sl-menu-item>';
+    return;
+  }
+  const phoneHtml = (state.phones ?? []).map(p => {
+    const items = p.apps.length
+      ? p.apps
+          .map(a => `<sl-menu-item type="checkbox" ${current?.phone === p.udid && current?.bundleId === a.bundleId ? 'checked' : ''} data-phone="${esc(p.udid)}" data-bundle="${esc(a.bundleId)}">
+            ${esc(a.name)} <span class="menu-port">${esc(a.bundleId)}</span><span slot="suffix" class="menu-port">Release · profiler</span></sl-menu-item>`)
+          .join('')
+      : '<sl-menu-item disabled><span style="color:var(--sl-color-neutral-500)">No self-signed builds installed (TestFlight/App Store builds can\'t be profiled)</span></sl-menu-item>';
+    return `<sl-divider></sl-divider><sl-menu-label>📱 ${esc(p.name)} <span class="menu-port">USB</span></sl-menu-label>${items}`;
+  });
+  if (!servers.length && !phoneHtml.length) {
+    menu.innerHTML = '<sl-menu-item disabled>No Metro dev servers or phones found. Start one with yarn start, or plug in your iPhone.</sl-menu-item>';
+    return;
+  }
+  const html = servers.map((server, i) => {
+    const watchingServer = current?.metro === server.url;
+    const items = server.apps.length
+      ? server.apps
+          .map(app => {
+            const on = watchingServer && (current.app ? current.app === app.appId && (!current.device || current.device === app.device) : state.status?.appId === app.appId && state.status?.device === app.device);
+            return `<sl-menu-item type="checkbox" ${on ? 'checked' : ''} data-metro="${esc(server.url)}" data-app="${esc(app.appId)}" data-device="${esc(app.device ?? '')}">
+              ${esc(app.appId)}<span slot="suffix" class="menu-port">${esc(app.device ?? '')}</span></sl-menu-item>`;
+          })
+          .join('')
+      : `<sl-menu-item type="checkbox" ${watchingServer ? 'checked' : ''} data-metro="${esc(server.url)}">
+          <span style="color:var(--sl-color-neutral-500)">No app connected yet</span></sl-menu-item>`;
+    return `${i ? '<sl-divider></sl-divider>' : ''}
+      <sl-menu-label>${esc(server.name)} <span class="menu-port">:${server.port}</span></sl-menu-label>
+      <span class="menu-path" title="${esc(server.project)}">${esc(server.project)}</span>
+      ${items}`;
+  });
+  menu.innerHTML = html.join('') + phoneHtml.join('');
+}
+
+$('#target-list').addEventListener('sl-select', async e => {
+  const { metro, app, device, phone, bundle } = e.detail.item.dataset;
+  if (!metro && !phone) return;
+  $('#target-menu').hide();
+  const res = await post('/api/attach', phone ? { phone, bundleId: bundle } : { metro, app: app || null, device: device || null });
+  if (res.error) toast(`Couldn't switch: ${res.error}`, 'danger');
+  else toast(phone ? `Sampling ${bundle} on your phone every 30s` : `Watching ${app || basename(state.servers.find(s => s.url === metro)?.project)}`, 'success');
+});
+
+// ---------------------------------------------------------------- lanes
+
+const canvas = $('#lanes');
+const ctx = canvas.getContext('2d');
+const LABEL_W = 210;
+const AXIS_H = 28;
+const BIG_ROW = 50;
+const ROW = 26;
+const IDLE_ROW = 26;
+const NET_ROW = 40;
+const CONSOLE_ROW = 26;
+const MEM_ROW = 58;
+const NET_TRACKS = 3;
+const MB = 1024 * 1024;
+const fmtMb = bytes => (bytes == null ? '—' : bytes >= 1024 * MB ? `${(bytes / 1024 / MB).toFixed(2)} GB` : `${Math.round(bytes / MB)} MB`);
+const shortUrl = url => {
+  try {
+    const u = new URL(url);
+    return `${u.host}${u.pathname}`;
+  } catch {
+    return url;
+  }
+};
+let layout = { rows: [], height: 0, idleCount: 0 };
+let layoutAt = 0;
+
+function viewRange() {
+  const replayEnd = state.status?.state === 'replay' ? Math.max(0, ...[...state.stalls, ...state.hot].map(e => e.at + 2000)) : 0;
+  // Phone data lands a chunk late; end the timeline at the newest recorded moment.
+  const phoneEnd = state.status?.release && state.status.lastDataAt ? state.status.lastDataAt : 0;
+  const end = replayEnd || (state.paused ? state.pausedAt : phoneEnd || Date.now());
+  return [end - state.windowSec * 1000, end];
+}
+
+function busyBetween(lane, from, to) {
+  let busy = 0;
+  let span = 0;
+  for (let i = lane.points.length - 1; i >= 0; i--) {
+    const [at, windowMs, pct] = lane.points[i];
+    if (at < from) break;
+    if (at - windowMs > to) continue;
+    busy += pct * windowMs;
+    span += windowMs;
+  }
+  return span ? busy / span : 0;
+}
+
+function computeLayout() {
+  const [from, to] = viewRange();
+  const lanes = [...state.lanes.values()];
+  const pinned = PINNED.map(name => state.lanes.get(name)).filter(Boolean);
+  // Two GC threads share a name upstream; keep the pinned order stable.
+  const rest = lanes
+    .filter(l => !PINNED.includes(l.name))
+    .map(l => ({ lane: l, busy: busyBetween(l, from, to) }))
+    .sort((a, b) => b.busy - a.busy);
+  const active = rest.filter(r => r.busy >= 0.004).map(r => r.lane);
+  const idle = rest.filter(r => r.busy < 0.004).map(r => r.lane);
+  const rows = [];
+  let y = AXIS_H;
+  for (const lane of pinned) {
+    const h = lane.name === 'Hermes GC (hades)' ? ROW : BIG_ROW;
+    rows.push({ lane, y, h });
+    y += h;
+  }
+  // Release builds on a phone report none of these; don't show empty rows.
+  const specials = state.status?.release ? [] : [['network', NET_ROW], ['console', CONSOLE_ROW], ['memory', MEM_ROW]];
+  for (const [special, h] of specials) {
+    rows.push({ special, y, h });
+    y += h;
+  }
+  for (const lane of active) {
+    rows.push({ lane, y, h: ROW });
+    y += ROW;
+  }
+  if (idle.length) {
+    rows.push({ idleToggle: true, y, h: IDLE_ROW, count: idle.length });
+    y += IDLE_ROW;
+    if (state.showIdle) {
+      for (const lane of idle) {
+        rows.push({ lane, y, h: ROW, idle: true });
+        y += ROW;
+      }
+    }
+  }
+  layout = { rows, height: y + 12, idleCount: idle.length };
+  $('#thread-count').textContent = `${active.length + pinned.length} active / ${state.lanes.size}`;
+}
+
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const width = canvas.parentElement.clientWidth;
+  const height = Math.max(layout.height, canvas.parentElement.clientHeight);
+  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.height = `${height}px`;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { width, height };
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+}
+
+function draw() {
+  if (performance.now() - layoutAt > 500) {
+    computeLayout();
+    layoutAt = performance.now();
+  }
+  const { width, height } = resizeCanvas();
+  const [from, to] = viewRange();
+  const trackX = LABEL_W;
+  const trackW = width - LABEL_W - 14;
+  const xOf = t => trackX + ((t - from) / (to - from)) * trackW;
+
+  ctx.clearRect(0, 0, width, height);
+
+  // axis
+  ctx.font = `500 10.5px ${FONT_MONO}`;
+  ctx.textBaseline = 'middle';
+  const step = state.windowSec <= 15 ? 2 : state.windowSec <= 30 ? 5 : state.windowSec <= 60 ? 10 : 30;
+  for (let s = 0; s <= state.windowSec; s += step) {
+    const x = xOf(to - s * 1000);
+    ctx.fillStyle = INK.grid;
+    ctx.fillRect(Math.round(x), AXIS_H, 1, height - AXIS_H);
+    ctx.fillStyle = INK.muted;
+    ctx.textAlign = s === 0 ? 'right' : 'center';
+    ctx.fillText(s === 0 ? (state.paused ? 'paused' : state.status?.release ? 'latest' : 'now') : `-${s}s`, x, AXIS_H / 2);
+  }
+
+  // Phone streaming records in chunks; mark what wasn't recorded so a gap
+  // never reads as an idle app.
+  if (state.status?.release) {
+    const covered = state.coverage.filter(c => c.to >= from && c.from <= to).sort((x, y) => x.from - y.from);
+    let cursor = from;
+    const gaps = [];
+    for (const c of covered) {
+      if (c.from > cursor) gaps.push([cursor, c.from]);
+      cursor = Math.max(cursor, c.to);
+    }
+    if (cursor < to) gaps.push([cursor, to]);
+    ctx.save();
+    for (const [g0, g1] of gaps) {
+      const x0 = Math.max(trackX, xOf(g0));
+      const x1 = Math.min(trackX + trackW, xOf(g1));
+      if (x1 - x0 < 1) continue;
+      ctx.fillStyle = INK.track;
+      ctx.globalAlpha = 0.7;
+      ctx.fillRect(x0, AXIS_H, x1 - x0, layout.height - AXIS_H);
+      ctx.globalAlpha = 0.25;
+      ctx.strokeStyle = INK.muted;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = x0 - (layout.height - AXIS_H); x < x1; x += 8) {
+        ctx.moveTo(Math.max(x, x0), AXIS_H + Math.max(0, x0 - x));
+        ctx.lineTo(Math.min(x + (layout.height - AXIS_H), x1), AXIS_H + Math.min(layout.height - AXIS_H, x1 - x));
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // hot-burst bands (behind lanes)
+  for (const hot of state.hot) {
+    const end = hot.until ?? hot.at + 1000;
+    if (end < from || hot.at > to) continue;
+    const x0 = Math.max(trackX, xOf(hot.at));
+    const x1 = Math.min(trackX + trackW, xOf(end));
+    const selected = hot.id === state.selectedId;
+    ctx.fillStyle = COLORS.hot;
+    ctx.globalAlpha = selected ? 0.16 : 0.07;
+    ctx.fillRect(x0, AXIS_H, x1 - x0, layout.height - AXIS_H);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'transparent';
+    ctx.fillRect(x0, AXIS_H, x1 - x0, layout.height - AXIS_H);
+    ctx.fillStyle = COLORS.hot;
+    for (let x = x0; x < x1; x += 4) ctx.fillRect(x, AXIS_H - 6, 2, 4);
+  }
+
+  // rows
+  for (const row of layout.rows) {
+    if (row.special) {
+      drawSpecialRow(row, { from, to, trackX, trackW, xOf });
+      continue;
+    }
+    if (row.idleToggle) {
+      ctx.fillStyle = INK.muted;
+      ctx.font = `500 11.5px ${FONT_SANS}`;
+      ctx.textAlign = 'left';
+      ctx.fillText(`${state.showIdle ? '▾' : '▸'}  ${row.count} idle thread${row.count === 1 ? '' : 's'}`, 16, row.y + row.h / 2);
+      ctx.fillStyle = INK.rule;
+      ctx.fillRect(trackX, row.y + row.h / 2, trackW, 1);
+      continue;
+    }
+    const { lane, y, h } = row;
+    const live = busyBetween(lane, to - LIVE_MS, to);
+    const big = h === BIG_ROW;
+
+    // label
+    ctx.fillStyle = lane.color;
+    roundRect(14, y + h / 2 - 4, 8, 8, 2);
+    ctx.fill();
+    ctx.fillStyle = row.idle ? INK.muted : big ? INK.text : INK.label;
+    ctx.font = `${big ? 600 : 500} ${big ? 12.5 : 11.5}px ${FONT_SANS}`;
+    ctx.textAlign = 'left';
+    const label = shortThreadName(lane.name);
+    const maxLabel = LABEL_W - 76;
+    let text = label;
+    while (ctx.measureText(text).width > maxLabel && text.length > 4) text = text.slice(0, -2);
+    const shown = text === label ? text : `${text}…`;
+    ctx.fillText(shown, 30, y + h / 2);
+    if (big || state.hover?.y >= y && state.hover?.y < y + h) infoGlyph(30 + ctx.measureText(shown).width + 6, y + h / 2);
+    ctx.font = `500 11px ${FONT_MONO}`;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = live > 0.6 ? COLORS.severe : live > 0.25 ? COLORS.stall : INK.muted;
+    ctx.fillText(`${Math.round(live * 100)}%`, LABEL_W - 12, y + h / 2);
+
+    // track
+    ctx.fillStyle = INK.track;
+    ctx.fillRect(trackX, y + 2, trackW, h - 4);
+    const base = y + h - 3;
+    const amp = h - 7;
+    ctx.fillStyle = lane.color;
+    for (const [at, windowMs, pct] of lane.points) {
+      if (at < from || at - windowMs > to || pct <= 0) continue;
+      const x0 = xOf(at - windowMs);
+      const x1 = xOf(at);
+      const barH = Math.max(1, pct * amp);
+      ctx.globalAlpha = 0.35 + pct * 0.65;
+      ctx.fillRect(x0, base - barH, Math.max(1, x1 - x0 - 0.5), barH);
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = INK.rule;
+    ctx.fillRect(trackX, y + h - 1, trackW, 1);
+  }
+
+  // stall markers on the JS lane, with a guide through every lane
+  const jsRow = layout.rows.find(r => r.lane?.name === 'JS thread');
+  let labelEnd = -Infinity;
+  for (const stall of [...state.stalls].sort((a, b) => a.at - b.at)) {
+    const end = stall.at + stall.ms;
+    if (end < from || stall.at > to) continue;
+    const x0 = xOf(stall.at);
+    const x1 = Math.max(x0 + 3, xOf(end));
+    const color = stall.ms >= SEVERE_MS ? COLORS.severe : COLORS.stall;
+    const selected = stall.id === state.selectedId;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = selected ? 0.12 : 0.04;
+    ctx.fillRect(x0, AXIS_H, x1 - x0, layout.height - AXIS_H);
+    ctx.globalAlpha = 1;
+    ctx.fillRect(x0, AXIS_H - 6, x1 - x0, 4);
+    if (jsRow) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = selected ? 2 : 1.25;
+      ctx.fillStyle = color;
+      roundRect(x0, jsRow.y + 3, x1 - x0, jsRow.h - 6, 3);
+      ctx.globalAlpha = 0.18;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.stroke();
+      // Skip a label that would collide with the previous one; hover still shows it.
+      ctx.font = `600 10.5px ${FONT_MONO}`;
+      const text = `${stall.ms}ms`;
+      if (x1 + 4 > labelEnd + 6) {
+        ctx.textAlign = 'left';
+        ctx.fillStyle = color;
+        ctx.fillText(text, x1 + 4, jsRow.y + 11);
+        labelEnd = x1 + 4 + ctx.measureText(text).width;
+      }
+    }
+  }
+
+  // hover crosshair
+  if (state.hover && state.hover.x > trackX) {
+    ctx.fillStyle = INK.muted;
+    ctx.fillRect(Math.round(state.hover.x), AXIS_H, 1, layout.height - AXIS_H);
+  }
+
+  requestAnimationFrame(draw);
+}
+
+function infoGlyph(x, cy) {
+  ctx.strokeStyle = INK.muted;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(x + 5, cy, 5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = INK.muted;
+  ctx.font = `600 8px ${FONT_SANS}`;
+  ctx.textAlign = 'center';
+  ctx.fillText('i', x + 5, cy + 0.5);
+}
+
+function rowLabel(row, title, value, color) {
+  ctx.fillStyle = color;
+  roundRect(14, row.y + row.h / 2 - 4, 8, 8, 2);
+  ctx.fill();
+  ctx.fillStyle = INK.text;
+  ctx.font = `600 12px ${FONT_SANS}`;
+  ctx.textAlign = 'left';
+  ctx.fillText(title, 30, row.y + row.h / 2);
+  infoGlyph(30 + ctx.measureText(title).width + 6, row.y + row.h / 2);
+  if (value) {
+    ctx.font = `500 10.5px ${FONT_MONO}`;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = INK.muted;
+    ctx.fillText(value, LABEL_W - 12, row.y + row.h / 2);
+  }
+}
+
+function requestColor(r) {
+  if (r.failed) return COLORS.severe;
+  if (r.ms >= (state.status?.settings?.slowRequestMs ?? 1000)) return COLORS.stall;
+  return COLORS.net;
+}
+
+function drawSpecialRow(row, { from, to, trackX, trackW, xOf }) {
+  const { y, h } = row;
+  ctx.fillStyle = INK.track;
+  ctx.fillRect(trackX, y + 2, trackW, h - 4);
+  if (row.special === 'network') {
+    const visible = state.requests.filter(r => r.at + r.ms >= from && r.at <= to);
+    rowLabel(row, 'Network', `${visible.length} req`, COLORS.net);
+    const trackH = (h - 8) / NET_TRACKS;
+    const ends = new Array(NET_TRACKS).fill(-Infinity);
+    for (const r of [...visible].sort((a, b) => a.at - b.at)) {
+      // First free sub-track, so overlapping requests stack instead of hiding.
+      let track = ends.findIndex(end => end < r.at);
+      if (track < 0) track = ends.indexOf(Math.min(...ends));
+      ends[track] = r.at + r.ms;
+      const x0 = Math.max(trackX, xOf(r.at));
+      const x1 = Math.min(trackX + trackW, Math.max(x0 + 2, xOf(r.at + r.ms)));
+      ctx.fillStyle = requestColor(r);
+      ctx.globalAlpha = r.id === state.selectedId ? 1 : 0.75;
+      roundRect(x0, y + 4 + track * trackH, x1 - x0, trackH - 2, 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  } else if (row.special === 'console') {
+    const visible = state.consoleEvents.filter(c => c.at >= from && c.at <= to);
+    rowLabel(row, 'Console', `${visible.length}`, COLORS.stall);
+    // Plain logs: faint ticks along the bottom, under the warnings and errors.
+    ctx.fillStyle = INK.muted;
+    ctx.globalAlpha = 0.55;
+    for (const l of state.logs) {
+      if (l.lastAt < from || l.at > to) continue;
+      ctx.fillRect(Math.round(xOf(l.at)), y + h - 9, 1.5, 5);
+    }
+    ctx.globalAlpha = 1;
+    for (const c of visible) {
+      const x = xOf(c.at);
+      ctx.fillStyle = c.level === 'error' ? COLORS.severe : COLORS.stall;
+      ctx.globalAlpha = c.id === state.selectedId ? 1 : 0.85;
+      ctx.beginPath();
+      ctx.moveTo(x, y + 5);
+      ctx.lineTo(x + 5, y + h - 6);
+      ctx.lineTo(x - 5, y + h - 6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  } else if (row.special === 'memory') {
+    const points = state.vitals.filter(v => v.at >= from - 4000 && v.at <= to);
+    // Lines start a sample before the window; keep them inside the track.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(trackX, y, trackW, h);
+    ctx.clip();
+    const series = [
+      ['heapUsed', COLORS.js],
+      ['rss', COLORS.ui],
+    ];
+    for (const [key, color] of series) {
+      const values = points.map(p => p[key]).filter(v => v != null);
+      if (values.length < 2) continue;
+      // Each line scales to its own range so a slow climb is visible.
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = Math.max(max - min, 4 * MB);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      let started = false;
+      for (const p of points) {
+        if (p[key] == null) continue;
+        const px = xOf(p.at);
+        const py = y + h - 5 - ((p[key] - min) / span) * (h - 12);
+        if (started) ctx.lineTo(px, py);
+        else ctx.moveTo(px, py);
+        started = true;
+      }
+      ctx.stroke();
+    }
+    for (const leak of state.alerts) {
+      if (leak.at < from || leak.at > to) continue;
+      ctx.fillStyle = COLORS.severe;
+      ctx.fillRect(xOf(leak.at) - 1, y + 3, 2, h - 6);
+    }
+    ctx.restore();
+    // Label drawn after the clip so the column stays clean.
+    const last = state.vitals.at(-1);
+    rowLabel(row, 'Memory', last ? fmtMb(last.heapUsed) : '', COLORS.js);
+  }
+  ctx.fillStyle = INK.rule;
+  ctx.fillRect(trackX, y + h - 1, trackW, 1);
+}
+
+function hitTest(x, y) {
+  const width = canvas.clientWidth;
+  const [from, to] = viewRange();
+  const trackW = width - LABEL_W - 14;
+  const t = from + ((x - LABEL_W) / trackW) * (to - from);
+  const row = layout.rows.find(r => y >= r.y && y < r.y + r.h) ?? null;
+  const pad = ((to - from) / trackW) * 4;
+  let item = null;
+  if (x > LABEL_W && row?.special === 'network') {
+    item = state.requests.filter(r => t >= r.at - pad && t <= r.at + r.ms + pad).sort((a, b) => b.ms - a.ms)[0] ?? null;
+  } else if (x > LABEL_W && row?.special === 'console') {
+    item = state.consoleEvents.filter(c => Math.abs(c.at - t) <= pad * 2).sort((a, b) => Math.abs(a.at - t) - Math.abs(b.at - t))[0] ?? null;
+  } else if (x > LABEL_W && row?.special === 'memory') {
+    item = state.alerts.find(a => Math.abs(a.at - t) <= pad * 2) ?? null;
+  }
+  const stall = !item && x > LABEL_W ? state.stalls.find(s => t >= s.at - pad && t <= s.at + s.ms + pad) : null;
+  const hot = !item && !stall && x > LABEL_W ? state.hot.find(h => t >= h.at && t <= (h.until ?? h.at + 1000)) : null;
+  return { t, row, stall, hot, item };
+}
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  state.hover = { x, y };
+  const { t, row, stall, hot, item } = hitTest(x, y);
+  const tip = $('#hover-tip');
+  canvas.style.cursor = item || stall || hot || row?.idleToggle ? 'pointer' : 'crosshair';
+  if (x < LABEL_W && (row?.lane || row?.special)) {
+    const name = row.lane ? shortThreadName(row.lane.name) : row.special[0].toUpperCase() + row.special.slice(1);
+    tip.innerHTML = `<div class="tip-name">${esc(name)}</div><div class="tip-info">${esc(row.lane ? threadInfo(row.lane.name) : ROW_INFO[row.special])}</div>`;
+    tip.hidden = false;
+    tip.style.left = `${x + 14}px`;
+    tip.style.top = `${y + 14}px`;
+    canvas.style.cursor = 'help';
+    return;
+  }
+  if (x < LABEL_W || (!row?.lane && !row?.special && !stall && !hot)) {
+    tip.hidden = true;
+    return;
+  }
+  const parts = [];
+  if (row?.special === 'memory') {
+    const v = state.vitals.reduce((best, p) => (!best || Math.abs(p.at - t) < Math.abs(best.at - t) ? p : best), null);
+    if (v) parts.push(`<div class="tip-name">Memory</div><div class="tip-val">JS heap ${fmtMb(v.heapUsed)} · app ${fmtMb(v.rss)}${v.threads ? ` · ${v.threads} threads` : ''}</div>`);
+  }
+  if (item?.type === 'request') parts.push(`<div class="tip-name">${esc(item.method)} ${esc(shortUrl(item.url))}</div><div class="tip-val">${item.ms}ms · ${item.failed ? (item.status ?? 'failed') : item.status}</div>`);
+  if (item?.type === 'console') parts.push(`<div class="tip-name">console.${item.level}${item.count > 1 ? ` ×${item.count}` : ''}</div><div class="tip-val">${esc(item.text.slice(0, 120))}</div>`);
+  if (row?.special === 'console' && !item) {
+    const [from, to] = viewRange();
+    const pad = ((to - from) / (canvas.clientWidth - LABEL_W - 14)) * 4;
+    const near = state.logs.filter(l => Math.abs(l.at - t) <= pad).slice(-4);
+    for (const l of near) parts.push(`<div class="tip-name">console.${l.level}${l.count > 1 ? ` ×${l.count}` : ''} · ${clock(l.at)}</div><div class="tip-val">${esc(l.text.split('\n')[0].slice(0, 120))}</div>`);
+  }
+  if (item?.type === 'leak' || item?.type === 'threadleak') parts.push(`<div class="tip-hint" style="color:var(--freeze-severe)">● ${esc(leakTitle(item))}</div>`);
+  if (row?.special === 'network' && !item) parts.push('<div class="tip-name">Network</div><div class="tip-val">XHR-based requests (axios etc). Expo fetch isn\'t reported by the app.</div>');
+  if (row?.lane) {
+    const pct = busyBetween(row.lane, t - 120, t + 120);
+    parts.push(`<div class="tip-name">${esc(shortThreadName(row.lane.name))}</div><div class="tip-val">${Math.round(pct * 100)}% busy · ${((Date.now() - t) / 1000).toFixed(1)}s ago</div>`);
+  }
+  if (stall) parts.push(`<div class="tip-hint" style="color:var(--freeze)">● ${stall.ms}ms JS freeze${stall.culprits[0] ? ` — ${esc(displayName(stall.culprits[0]))}` : ''} · click to inspect</div>`);
+  if (hot) parts.push(`<div class="tip-hint" style="color:var(--sampled)">● ${esc(hot.trigger)} · click to inspect</div>`);
+  tip.innerHTML = parts.join('');
+  tip.hidden = false;
+  const wrap = canvas.parentElement;
+  tip.style.left = `${Math.min(x + 14, wrap.clientWidth - tip.offsetWidth - 8)}px`;
+  tip.style.top = `${y + 14}px`;
+});
+
+canvas.addEventListener('mouseleave', () => {
+  state.hover = null;
+  $('#hover-tip').hidden = true;
+});
+
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const { row, stall, hot, item } = hitTest(e.clientX - rect.left, e.clientY - rect.top);
+  if (row?.idleToggle) {
+    state.showIdle = !state.showIdle;
+    layoutAt = 0;
+    return;
+  }
+  const event = item ?? stall ?? hot;
+  if (event) select(event.id);
+});
+
+// ---------------------------------------------------------------- events list
+
+const FILTERS = {
+  all: () => true,
+  stall: e => e.type === 'stall',
+  hot: e => e.type === 'hot',
+  console: e => e.type === 'console',
+  'console-error': e => e.type === 'console' && e.level === 'error',
+  'console-warn': e => e.type === 'console' && e.level === 'warn',
+  request: e => e.type === 'request',
+  startup: e => e.type === 'startup',
+  leak: e => e.type === 'leak' || e.type === 'threadleak',
+  jank: e => e.type === 'jank',
+  screen: e => e.type === 'screen',
+  'no-dev': e => !(e.type === 'stall' && e.devOnly),
+};
+
+// Everything a search can match on: messages, URLs, function names and files.
+const searchText = e =>
+  [e.text, e.lastText, e.method, e.url, e.trigger, e.kind, e.screen, e.name, e.source?.file, e.source?.name, ...(e.culprits ?? []).flatMap(c => [c.name, c.file]), ...(e.react?.components ?? []).map(c => c.name), ...(e.renders?.components ?? []).map(c => c.name), ...(e.actions ?? []).map(a => a.type), ...(e.threads ?? []).map(t => t.label)]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+function capturedEvents() {
+  return [...state.stalls, ...state.hot, ...state.consoleEvents, ...state.requests.filter(r => r.issue), ...state.startups, ...state.alerts, ...state.jank, ...state.screens].sort((a, b) => b.at - a.at);
+}
+
+function allEvents() {
+  const terms = state.search.toLowerCase().split(/\s+/).filter(Boolean);
+  const matches = FILTERS[state.filter] ?? FILTERS.all;
+  return capturedEvents().filter(e => matches(e) && (!terms.length || terms.every(term => searchText(e).includes(term))));
+}
+
+const findEvent = id => [state.stalls, state.hot, state.consoleEvents, state.requests, state.startups, state.alerts, state.jank, state.screens].flat().find(e => e.id === id);
+
+const leakTitle = a =>
+  a.type === 'threadleak'
+    ? `Threads piling up: ${a.from} → ${a.to}`
+    : a.kind === 'reload'
+      ? 'App memory not freed by a JS reload'
+      : `${a.kind === 'heap' ? 'JS heap' : 'App memory'} climbing ${a.mbPerMin} MB/min`;
+
+// Anonymous callbacks read better as "callback in <enclosing function>".
+const displayName = c => (c.owner && /^(anonymous|\(anonymous\))?$/.test(c.name) ? `${c.owner} › callback` : c.name);
+
+function eventText(event) {
+  const c = event.culprits[0];
+  if (event.devOnly) return { title: `${event.devOnly} (dev-only)`, where: c?.file ? `from ${c.file}:${c.line}` : 'dev tooling' };
+  if (event.react || event.renders?.renderMs >= event.ms * 0.3) {
+    const names = (event.renders?.components.length ? event.renders.components : event.react?.components ?? []).slice(0, 3).map(x => x.name);
+    const avoidable = event.renders?.avoidable ? ` · ${event.renders.avoidable} avoidable re-renders` : '';
+    return { title: `React ${event.react?.phase ?? 'render'}${names.length ? ` · ${names.join(', ')}` : ''}`, where: `${event.react?.trigger ?? 'synchronous React work'}${avoidable}` };
+  }
+  return culpritText(c);
+}
+
+function culpritText(c) {
+  if (!c) return { title: 'JS freeze (no stack)', where: 'ended before a stack could be captured' };
+  // Time spent inside a library: name the library, then the app line that called it.
+  if (c.hot?.kind === 'lib' && c.kind === 'app') return { title: `${c.hot.pkg} › ${c.hot.name}`, where: `from ${c.file}:${c.line}` };
+  if (c.file) return { title: displayName(c), where: `${c.file}:${c.line}` };
+  if (c.file) return { title: c.name, where: `${c.file}:${c.line}` };
+  return { title: c.name, where: c.kind === 'native' ? 'native / Hermes builtin' : c.where ?? c.kind };
+}
+
+// Freezes that came back to back (a screen load, a scroll) share a burst id.
+const burstSize = stall => (stall.burst == null ? 1 : state.stalls.filter(s => s.burst === stall.burst).length);
+
+function renderEvents() {
+  const list = $('#events');
+  const events = allEvents();
+  $('#event-count').textContent = events.length;
+  const filtered = state.filter !== 'all' || state.search.trim();
+  $('#events-empty').hidden = events.length > 0 || filtered;
+  $('#events-nomatch').hidden = events.length > 0 || !filtered;
+  list.replaceChildren(
+    ...events.map(event => {
+      const item = el('button', 'event');
+      item.type = 'button';
+      if (event.id === state.selectedId) item.classList.add('selected');
+      if (event.type === 'stall') {
+        const severe = event.ms >= SEVERE_MS;
+        if (severe) item.classList.add('severe');
+        if (!event.culprits.length) item.classList.add('uncaught');
+        const { title, where } = eventText(event);
+        item.innerHTML = `<sl-icon class="icon" name="${severe ? 'exclamation-octagon-fill' : 'exclamation-triangle-fill'}"></sl-icon>
+          <span class="title">${esc(title)}</span>
+          <span class="meta"><sl-badge variant="${severe ? 'danger' : 'warning'}" pill>${event.ms}ms</sl-badge><span>${ago(event.at)}</span></span>
+          <span class="where">${event.devOnly ? `<sl-badge variant="neutral" class="dev-badge">dev-only</sl-badge> ` : ''}${esc(where)}${burstSize(event) > 1 ? ` · burst of ${burstSize(event)}` : ''}${event.screen ? ` · ${esc(event.screen)}` : ''}</span>`;
+      } else if (event.type === 'console') {
+        const error = event.level === 'error';
+        item.classList.add(error ? 'severe' : 'warn');
+        const where = event.source?.file ? `${event.source.file}:${event.source.line}` : 'no app frame on the stack';
+        item.innerHTML = `<sl-icon class="icon" name="${error ? 'x-circle-fill' : 'exclamation-circle-fill'}"></sl-icon>
+          <span class="title">${esc(event.text.split('\n')[0].slice(0, 140))}</span>
+          <span class="meta"><sl-badge variant="${error ? 'danger' : 'warning'}" pill>${event.exception ? 'exception' : error ? 'error' : 'warn'}${event.count > 1 ? ` ×${event.count}` : ''}</sl-badge><span>${ago(event.lastAt ?? event.at)}</span></span>
+          <span class="where">${esc(where)}</span>`;
+      } else if (event.type === 'request') {
+        item.classList.add(event.failed ? 'severe' : 'warn', 'net');
+        item.innerHTML = `<sl-icon class="icon" name="${event.failed ? 'wifi-off' : 'hourglass-split'}"></sl-icon>
+          <span class="title">${esc(event.method)} ${esc(shortUrl(event.url))}</span>
+          <span class="meta"><sl-badge variant="${event.failed ? 'danger' : 'warning'}" pill>${event.failed ? (event.status ?? 'failed') : `${(event.ms / 1000).toFixed(1)}s`}</sl-badge><span>${ago(event.at)}</span></span>
+          <span class="where">${esc(event.failed ? `${event.error ?? `HTTP ${event.status}`} · ${event.ms}ms` : `slow request · HTTP ${event.status ?? '?'}`)}${event.source?.file ? ` · ${esc(event.source.file)}:${event.source.line}` : ''}</span>`;
+      } else if (event.type === 'startup') {
+        item.classList.add('startup');
+        const total = event.toSettleMs ?? event.toJsMs;
+        item.innerHTML = `<sl-icon class="icon" name="rocket-takeoff"></sl-icon>
+          <span class="title">${event.kind === 'reload' ? 'App reload' : 'Cold launch'}</span>
+          <span class="meta"><sl-badge variant="primary" pill>${total != null ? `${(total / 1000).toFixed(1)}s` : '—'}</sl-badge><span>${ago(event.at)}</span></span>
+          <span class="where">${event.toJsMs != null ? `JS started ${(event.toJsMs / 1000).toFixed(1)}s` : 'JS start not seen'} · ${event.settled ? `settled ${(event.toSettleMs / 1000).toFixed(1)}s` : 'never settled within 30s'}</span>`;
+      } else if (event.type === 'leak' || event.type === 'threadleak') {
+        item.classList.add('severe');
+        item.innerHTML = `<sl-icon class="icon" name="${event.type === 'threadleak' ? 'diagram-3' : 'graph-up-arrow'}"></sl-icon>
+          <span class="title">${esc(leakTitle(event))}</span>
+          <span class="meta"><sl-badge variant="danger" pill>${event.type === 'threadleak' ? `+${event.to - event.from}` : `+${fmtMb(event.to - event.from)}`}</sl-badge><span>${ago(event.at)}</span></span>
+          <span class="where">${esc(event.type === 'threadleak' ? (event.grew.map(g => `${shortThreadName(g.name)} +${g.added}`).join(', ') || 'unnamed threads') : `${fmtMb(event.from)} → ${fmtMb(event.to)} over 3 min`)}</span>`;
+      } else if (event.type === 'jank') {
+        item.classList.add('warn');
+        const names = event.renders?.components?.slice(0, 2).map(c => c.name) ?? [];
+        item.innerHTML = `<sl-icon class="icon" name="film"></sl-icon>
+          <span class="title">Choppy frames${event.screen ? ` on ${esc(event.screen)}` : ''}</span>
+          <span class="meta"><sl-badge variant="warning" pill>${event.fps} fps</sl-badge><span>${ago(event.at)}</span></span>
+          <span class="where">${event.seconds}s · ${event.dropped} frames dropped outside freezes${names.length ? ` · rendering ${esc(names.join(', '))}` : ''}</span>`;
+      } else if (event.type === 'screen') {
+        item.classList.add(event.issue ? 'warn' : 'startup');
+        item.innerHTML = `<sl-icon class="icon" name="window-stack"></sl-icon>
+          <span class="title">${esc(event.name)} screen</span>
+          <span class="meta"><sl-badge variant="${event.issue ? 'warning' : 'primary'}" pill>${(event.ms / 1000).toFixed(1)}s</sl-badge><span>${ago(event.at)}</span></span>
+          <span class="where">${event.commits} renders · ${event.mounts} mounts${event.stalls ? ` · ${event.stalls} freeze${event.stalls === 1 ? '' : 's'}` : ''}${event.settled ? '' : ' · never settled'}</span>`;
+      } else if (event.jsBusy) {
+        // A phone (Release) freeze: no JS stack, so name what the JS thread was doing natively.
+        const severe = event.ms >= SEVERE_MS;
+        item.classList.add(severe ? 'severe' : 'warn');
+        const js = event.threads.find(t => t.label === 'JS thread');
+        const others = event.threads.filter(t => t.label !== 'JS thread').slice(0, 2).map(t => `${shortThreadName(t.label)} ${t.busyPct}%`);
+        item.innerHTML = `<sl-icon class="icon" name="${severe ? 'exclamation-octagon-fill' : 'exclamation-triangle-fill'}"></sl-icon>
+          <span class="title">JS freeze on phone${js ? ` · ${esc(js.categories[0]?.name ?? '')}` : ''}</span>
+          <span class="meta"><sl-badge variant="${severe ? 'danger' : 'warning'}" pill>${event.ms}ms</sl-badge><span>${ago(event.at)}</span></span>
+          <span class="where">${esc(others.length ? `meanwhile ${others.join(', ')}` : 'Release build: no JS stack available')}</span>`;
+      } else {
+        item.classList.add('hot');
+        const top = event.threads[0];
+        item.innerHTML = `<sl-icon class="icon" name="fire"></sl-icon>
+          <span class="title">${esc(top ? `${shortThreadName(top.label)} running hot` : event.trigger)}</span>
+          <span class="meta"><sl-badge variant="neutral" pill>${top ? `${top.busyPct}%` : '—'}</sl-badge><span>${ago(event.at)}</span></span>
+          <span class="where">${esc(top ? `${top.categories[0]?.name ?? ''} · ${event.trigger}` : 'cooled before the sample')}</span>`;
+      }
+      item.addEventListener('click', () => select(event.id));
+      return item;
+    }),
+  );
+}
+
+setInterval(() => {
+  if (!$('#list-panel').hidden) renderEvents();
+}, 15000);
+
+// ---------------------------------------------------------------- detail
+
+function select(id) {
+  const event = findEvent(id);
+  if (!event) return;
+  state.selectedId = id;
+  renderEvents();
+  $('#list-panel').hidden = true;
+  $('#detail-panel').hidden = false;
+  renderDetail(event);
+}
+
+function showList() {
+  state.selectedId = null;
+  $('#detail-panel').hidden = true;
+  $('#list-panel').hidden = false;
+  renderEvents();
+}
+
+const KEYWORDS = /^(const|let|var|function|return|if|else|for|while|of|in|new|await|async|export|import|from|default|class|extends|true|false|null|undefined|this|typeof|switch|case|break|continue|try|catch|throw|interface|type)$/;
+function highlight(line) {
+  return line.replace(/(\/\/.*$)|('(?:\\.|[^'])*'|"(?:\\.|[^"])*"|`(?:\\.|[^`])*`)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)(?=\s*\()|([A-Za-z_$][\w$]*)|([^A-Za-z_$\d'"`/]+|\/)/g, (m, com, str, num, fnc, word, other) => {
+    if (com) return `<span class="com">${esc(com)}</span>`;
+    if (str) return `<span class="str">${esc(str)}</span>`;
+    if (num) return `<span class="num">${esc(num)}</span>`;
+    if (fnc) return KEYWORDS.test(fnc) ? `<span class="kw">${esc(fnc)}</span>` : `<span class="fnc">${esc(fnc)}</span>`;
+    if (word) return KEYWORDS.test(word) ? `<span class="kw">${esc(word)}</span>` : esc(word);
+    return esc(other ?? m);
+  });
+}
+
+async function loadCode(container, file, line) {
+  const res = await fetch(`/api/source?file=${encodeURIComponent(file)}&line=${line}&context=7`);
+  if (!res.ok) {
+    container.innerHTML = '<sl-alert open variant="neutral">Source not readable from the project folder.</sl-alert>';
+    return;
+  }
+  const src = await res.json();
+  container.innerHTML = `<pre class="code">${src.lines.map(l => `<div class="ln${l.n === line ? ' hit' : ''}"><span>${l.n}</span><span>${highlight(l.text)}</span></div>`).join('')}</pre>`;
+  container.querySelector('.hit')?.scrollIntoView({ block: 'nearest' });
+}
+
+function shareRows(rows) {
+  return `<div class="share">${rows
+    .map(r => `<div class="share-row"><span class="lbl" title="${esc(r.label)}">${esc(r.label)}</span><span class="pct">${r.text}</span><sl-progress-bar value="${Math.max(2, Math.round(r.pct))}" style="--indicator-color:${r.color}"></sl-progress-bar></div>`)
+    .join('')}</div>`;
+}
+
+function renderStack(frames, culpritIndex) {
+  const items = [];
+  let fold = [];
+  const flush = () => {
+    if (!fold.length) return;
+    const pkgs = [...new Set(fold.map(f => f.pkg ?? (f.kind === 'native' ? 'native' : 'bundle')))].slice(0, 3).join(', ');
+    const hidden = fold;
+    items.push({ fold: hidden, label: `${hidden.length} library frame${hidden.length === 1 ? '' : 's'} · ${pkgs}` });
+    fold = [];
+  };
+  frames.forEach((f, i) => {
+    if (f.kind === 'app' || i === 0 || i === culpritIndex) {
+      flush();
+      items.push({ frame: f });
+    } else {
+      fold.push(f);
+    }
+  });
+  flush();
+
+  const list = el('ol', 'stack');
+  const frameItem = f => {
+    const li = el('li', f.kind === 'app' ? 'app' : '');
+    li.innerHTML = `<span class="dot"></span><span><span class="f-name">${esc(f.name)}</span><span class="f-loc">${esc(f.file ? `${f.file}:${f.line}` : f.kind === 'native' ? 'native' : f.where ?? f.kind)}</span></span>`;
+    if (f.kind === 'app') li.querySelector('.f-loc').addEventListener('click', () => openEditor(f.file, f.line));
+    return li;
+  };
+  for (const item of items) {
+    if (item.frame) {
+      list.append(frameItem(item.frame));
+      continue;
+    }
+    const li = el('li', 'fold', `<sl-icon name="chevron-right"></sl-icon><span>${esc(item.label)}</span>`);
+    li.addEventListener('click', () => li.replaceWith(...item.fold.map(frameItem)));
+    list.append(li);
+  }
+  return list;
+}
+
+function threadsDuring(from, to, exclude) {
+  return [...state.lanes.values()]
+    .filter(l => l.name !== exclude)
+    .map(l => ({ lane: l, pct: busyBetween(l, from, to) }))
+    .filter(r => r.pct >= 0.05)
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, 5);
+}
+
+function renderDetail(event) {
+  const root = $('#detail');
+  root.replaceChildren();
+  const renderers = {
+    stall: renderStallDetail,
+    hot: renderHotDetail,
+    console: renderConsoleDetail,
+    request: renderRequestDetail,
+    startup: renderStartupDetail,
+    leak: renderLeakDetail,
+    threadleak: renderLeakDetail,
+    jank: renderJankDetail,
+    screen: renderScreenDetail,
+  };
+  $('#editor-btn').disabled = true;
+  headerType = event.type;
+  renderers[event.type](root, event);
+  root.querySelector('.back').addEventListener('click', showList);
+  root.scrollTop = 0;
+}
+
+let headerType = null;
+function header(kindBadge, number, unit, time) {
+  return `<div class="d-top">
+      <sl-button class="back" size="small" variant="text"><sl-icon slot="prefix" name="arrow-left"></sl-icon>All events</sl-button>
+      <div class="spacer"></div>${kindBadge}${EVENT_INFO[headerType] ? info(EVENT_INFO[headerType]) : ''}
+    </div>
+    <div class="d-big"><span class="num">${number}</span><span class="unit">${unit}</span></div>
+    <div class="d-time">${time}</div>`;
+}
+
+function section(title, hint) {
+  const node = el('div', 'd-section');
+  node.innerHTML = `<h3>${title}${hint ? ` <small>${hint}</small>` : ''}</h3>`;
+  return node;
+}
+
+function renderStallDetail(root, stall) {
+  const severe = stall.ms >= SEVERE_MS;
+  const top = stall.culprits[0];
+  const same = top ? state.stalls.filter(s => s.culprits[0]?.key === top.key) : [];
+  const where = top?.file ? `<code>${esc(displayName(top))}</code> in <code>${esc(top.file)}:${top.line}</code>` : top ? `<code>${esc(top.name)}</code> (${esc(top.kind === 'native' ? 'native code' : 'outside your source')})` : null;
+  const inLib = top?.hot?.kind === 'lib' && top.kind === 'app';
+  const libSentence = inLib
+    ? ` The time itself was inside <strong>${esc(top.hot.pkg)}</strong> (<code>${esc(top.hot.name)}</code>)${top.via?.length ? `, reached through ${top.via.map(v => `<code>${esc(v)}</code>`).join(' › ')}` : ''}. Your code on that path:`
+    : '';
+  const react = !stall.devOnly ? stall.react : null;
+  const reactSentence = react
+    ? `This was <strong>React work</strong>: ${react.captures} of ${stall.snapshotCount} captures were inside one synchronous React ${react.phase}${react.trigger ? `, started by ${esc(react.trigger)}` : ''}. The cost is that whole render, not a single line. The highlighted line below is just where a capture landed.`
+    : null;
+  const summary = reactSentence
+    ? `The JS thread was busy for <strong>${stall.ms}ms</strong> without a break, so taps, scrolling and JS animations were frozen. ${reactSentence}`
+    : top
+    ? `The JS thread was busy for <strong>${stall.ms}ms</strong> without a break, so taps, scrolling and JS animations were frozen. ${top.count} of ${stall.snapshotCount} stack capture${stall.snapshotCount === 1 ? ' was' : 's were'} ${inLib ? 'on the same path.' : `inside ${where}.`}${libSentence}`
+    : `The JS thread was busy for <strong>${stall.ms}ms</strong> without a break. It ended before a stack could be captured; the next one like it is usually caught.`;
+  const repeat = same.length > 1 ? ` · <sl-badge variant="warning" pill>${same.length}× this session</sl-badge>` : '';
+
+  if (stall.stale) {
+    root.insertAdjacentHTML('beforeend', '<sl-alert open variant="warning" style="margin-bottom:var(--sl-spacing-medium)"><sl-icon slot="icon" name="exclamation-triangle"></sl-icon>Captured while the app ran an older bundle than Metro — the file and line below may be wrong. Reload the app and reproduce it.</sl-alert>');
+  }
+  root.insertAdjacentHTML(
+    'beforeend',
+    `${header(`<sl-badge variant="${severe ? 'danger' : 'warning'}">JS freeze</sl-badge>`, stall.ms, 'ms blocked', `${clock(stall.at)} · ${ago(stall.at)}${repeat}`)}
+    <p class="d-summary">${summary}</p>`,
+  );
+
+  const context = [
+    stall.screen && `on the <strong>${esc(stall.screen)}</strong> screen`,
+    stall.actions?.length && `while dispatching <code>${esc(stall.actions[0].type)}</code>`,
+    burstSize(stall) > 1 && `one of ${burstSize(stall)} freezes in a row`,
+    stall.sampled && 'stacks from the sampling profiler',
+  ].filter(Boolean);
+  if (context.length) root.insertAdjacentHTML('beforeend', `<p class="d-summary d-context">${context.join(' · ')}</p>`);
+
+  const renders = rendersSection(stall.renders, 'What React rendered', 'during the freeze, and why');
+  if (renders) root.append(renders);
+
+  if (stall.snapshotCount > 0 && stall.snapshotCount <= 2) {
+    root.insertAdjacentHTML('beforeend', `<sl-alert open variant="neutral" class="dev-alert"><sl-icon slot="icon" name="info-circle"></sl-icon>Only ${stall.snapshotCount} stack capture${stall.snapshotCount === 1 ? '' : 's'}, so treat the location as a lead, not proof. Repeat the interaction to collect more.</sl-alert>`);
+  }
+
+  if (react?.components.length) {
+    const node = section('Components rendering', 'seen on the stack during the freeze');
+    const chips = el('div', 'chips');
+    for (const c of react.components) {
+      const tag = el('sl-tag', '', `${esc(c.name)} <span class="menu-port">${c.count}/${stall.snapshotCount}</span>`);
+      tag.size = 'small';
+      tag.title = `${c.file}:${c.line}`;
+      tag.style.cursor = 'pointer';
+      tag.addEventListener('click', () => openEditor(c.file, c.line));
+      chips.append(tag);
+    }
+    node.append(chips);
+    root.append(node);
+  }
+
+  if (inLib && !react && top.appChain?.length) {
+    const chain = el('ol', 'stack app-chain');
+    for (const f of top.appChain) {
+      const li = el('li', 'app', `<span class="dot"></span><span><span class="f-name">${esc(f.name)}</span><span class="f-loc">${esc(f.file)}:${f.line}</span></span>`);
+      li.querySelector('.f-loc').addEventListener('click', () => openEditor(f.file, f.line));
+      chain.append(li);
+    }
+    root.append(chain);
+  }
+
+  if (stall.devOnly) {
+    root.insertAdjacentHTML('beforeend', `<sl-alert open variant="neutral" class="dev-alert"><sl-icon slot="icon" name="tools"></sl-icon><strong>Dev-only: ${esc(stall.devOnly)}.</strong> This work doesn't run in production builds, so users never feel it — but it does make your dev session janky and can hide real problems. Consider turning it off while profiling.</sl-alert>`);
+  }
+
+  if (top) {
+    const node = section('What was running');
+    const card = el('sl-card');
+    card.innerHTML = `<div slot="header" class="card-head">
+        <span class="fn">${esc(displayName(top))}</span><div class="spacer"></div>
+        ${top.file ? `<sl-button size="small" variant="text" class="loc">${esc(top.file)}:${top.line}<sl-icon slot="suffix" name="box-arrow-up-right"></sl-icon></sl-button>` : ''}
+      </div><div class="code-slot"></div>`;
+    node.append(card);
+    root.append(node);
+    if (top.file) {
+      card.querySelector('.loc').addEventListener('click', () => openEditor(top.file, top.line));
+      loadCode(card.querySelector('.code-slot'), top.file, top.line);
+    } else {
+      card.querySelector('.code-slot').innerHTML = '<sl-alert open variant="neutral" style="margin:var(--sl-spacing-small)">No source line: this frame is native or inside the Hermes runtime. The stack below shows which of your code called it.</sl-alert>';
+    }
+  }
+
+  if (stall.culprits.length > 1) {
+    const node = section('Where the time went', 'share of stack captures');
+    node.insertAdjacentHTML(
+      'beforeend',
+      shareRows(stall.culprits.map(c => ({ label: c.file ? `${displayName(c)} · ${c.file}:${c.line}` : c.name, pct: (c.count / stall.snapshotCount) * 100, text: `${c.count}/${stall.snapshotCount}`, color: c.kind === 'app' ? COLORS.js : COLORS.other }))),
+    );
+    root.append(node);
+  }
+
+  const frames = stall.snapshots[top?.snapshot ?? 0];
+  if (frames?.length) {
+    const node = section('Call stack', 'innermost first · your code highlighted');
+    const culpritIndex = frames.findIndex(f => top && f.name === top.name && f.file === top.file && f.line === top.line);
+    node.append(renderStack(frames, culpritIndex));
+    root.append(node);
+  }
+
+  const around = relatedSection('Around this freeze', relatedAround(stall.at - 1500, stall.at + stall.ms + 1500, stall.id));
+  const stallLogs = logsSection(stall.at - 5000, stall.at + stall.ms + 500);
+  if (around) root.append(around);
+  if (stallLogs) root.append(stallLogs);
+
+  const others = threadsDuring(stall.at, stall.at + stall.ms, 'JS thread');
+  if (others.length) {
+    const node = section('Other threads during the freeze');
+    node.insertAdjacentHTML('beforeend', shareRows(others.map(o => ({ label: shortThreadName(o.lane.name), pct: o.pct * 100, text: `${Math.round(o.pct * 100)}%`, color: o.lane.color }))));
+    root.append(node);
+  }
+
+  $('#editor-btn').disabled = !top?.file;
+  $('#editor-btn').onclick = () => top?.file && openEditor(top.file, top.line);
+}
+
+// What else happened in the app around a moment: console output and requests.
+function relatedAround(from, to, excludeId) {
+  const near = [
+    ...state.consoleEvents.filter(c => c.at >= from && c.at <= to),
+    ...state.requests.filter(r => r.at <= to && r.at + r.ms >= from),
+    ...state.stalls.filter(s => s.at <= to && s.at + s.ms >= from),
+  ].filter(e => e.id !== excludeId);
+  return near.sort((a, b) => a.at - b.at).slice(0, 12);
+}
+
+// The plain log lines around a moment, oldest first: what the app said it was doing.
+function logsSection(from, to) {
+  const lines = state.logs.filter(l => l.lastAt >= from && l.at <= to).slice(-20);
+  if (!lines.length) return null;
+  const node = section('App logs', `${clock(from)}–${clock(to)}`);
+  const list = el('div', 'log-lines');
+  for (const l of lines) {
+    const row = el('div', `log-line ${l.level}`);
+    row.innerHTML = `<span class="log-time">${clock(l.at)}</span><span class="log-text">${esc(l.text)}</span>${l.count > 1 ? `<sl-badge variant="neutral" pill>×${l.count}</sl-badge>` : ''}`;
+    list.append(row);
+  }
+  node.append(list);
+  return node;
+}
+
+const stackText = frames => frames.map(f => `${f.name ?? '?'}  ${f.file ? `${f.file}:${f.line}` : (f.where ?? f.kind ?? '')}`).join('\n');
+
+// A copy button on a section's heading.
+function copyButton(node, value, label) {
+  const button = el('sl-copy-button');
+  button.value = value;
+  button.copyLabel = label;
+  button.successLabel = 'Copied';
+  node.querySelector('h3').append(button);
+}
+
+function relatedSection(title, items) {
+  if (!items.length) return null;
+  const node = section(title);
+  const list = el('div', 'related');
+  for (const e of items) {
+    const label =
+      e.type === 'console'
+        ? `console.${e.level}: ${e.text.split('\n')[0].slice(0, 90)}`
+        : e.type === 'request'
+          ? `${e.method} ${shortUrl(e.url)} · ${e.ms}ms${e.failed ? ' · failed' : ''}`
+          : `JS freeze ${e.ms}ms`;
+    const b = el('sl-button', '', esc(label));
+    b.size = 'small';
+    b.variant = 'text';
+    b.style.justifySelf = 'start';
+    b.addEventListener('click', () => select(e.id));
+    list.append(b);
+  }
+  node.append(list);
+  return node;
+}
+
+function frameList(root, frames, title) {
+  if (!frames?.length) return;
+  const node = section(title, 'innermost first · your code highlighted');
+  copyButton(node, stackText(frames), 'Copy stack');
+  node.append(renderStack(frames, frames.findIndex(f => f.kind === 'app')));
+  root.append(node);
+}
+
+function codeCard(root, title, frame) {
+  if (!frame?.file) return;
+  const node = section(title);
+  const card = el('sl-card');
+  card.innerHTML = `<div slot="header" class="card-head"><span class="fn">${esc(frame.name)}</span><div class="spacer"></div>
+    <sl-button size="small" variant="text" class="loc">${esc(frame.file)}:${frame.line}<sl-icon slot="suffix" name="box-arrow-up-right"></sl-icon></sl-button></div><div class="code-slot"></div>`;
+  card.querySelector('.loc').addEventListener('click', () => openEditor(frame.file, frame.line));
+  loadCode(card.querySelector('.code-slot'), frame.file, frame.line);
+  node.append(card);
+  root.append(node);
+  $('#editor-btn').disabled = false;
+  $('#editor-btn').onclick = () => openEditor(frame.file, frame.line);
+}
+
+function renderConsoleDetail(root, c) {
+  const error = c.level === 'error';
+  const kind = c.exception ? 'Uncaught exception' : error ? 'console.error' : 'console.warn';
+  const lastAt = c.lastAt ?? c.at;
+  root.insertAdjacentHTML(
+    'beforeend',
+    `${header(`<sl-badge variant="${error ? 'danger' : 'warning'}">${kind}</sl-badge>`, c.count > 1 ? `×${c.count}` : '1×', c.count > 1 ? 'times' : 'logged', `${clock(c.at)} · ${ago(lastAt)}`)}
+    ${c.count > 1 ? `<dl class="kv"><dt>First seen</dt><dd>${clock(c.at)}</dd><dt>Last seen</dt><dd>${clock(lastAt)} · ${ago(lastAt)}</dd></dl>` : ''}`,
+  );
+  const message = section('Message');
+  copyButton(message, c.text, 'Copy message');
+  message.insertAdjacentHTML('beforeend', `<pre class="console-text">${esc(c.text)}</pre>`);
+  root.append(message);
+  if (c.lastText) {
+    const latest = section('Latest repeat', 'same message, different values');
+    copyButton(latest, c.lastText, 'Copy message');
+    latest.insertAdjacentHTML('beforeend', `<pre class="console-text">${esc(c.lastText)}</pre>`);
+    root.append(latest);
+  }
+  if (c.source) codeCard(root, 'Logged from', c.source);
+  else root.insertAdjacentHTML('beforeend', '<sl-alert open variant="neutral" class="dev-alert"><sl-icon slot="icon" name="info-circle"></sl-icon>No app code on the stack. This came from a library or native module.</sl-alert>');
+  const related = relatedSection('Around this message', relatedAround(c.at - 1500, c.at + 1500, c.id));
+  if (related) root.append(related);
+  const logs = logsSection(c.at - 5000, c.at + 500);
+  if (logs) root.append(logs);
+  frameList(root, c.frames, 'Call stack');
+}
+
+function renderRequestDetail(root, r) {
+  const slowMs = state.status?.settings?.slowRequestMs ?? 1000;
+  const verdict = r.failed ? (r.error ? `failed: ${esc(r.error)}` : `failed with HTTP ${r.status}`) : r.ms >= slowMs ? `took ${(r.ms / 1000).toFixed(1)}s, over your ${slowMs}ms threshold` : 'completed';
+  root.insertAdjacentHTML(
+    'beforeend',
+    `${header(`<sl-badge variant="${r.failed ? 'danger' : 'warning'}">${r.failed ? 'Failed request' : 'Slow request'}</sl-badge>`, r.ms, 'ms', `${clock(r.at)} · ${ago(r.at)}`)}
+    <p class="d-summary">This <code>${esc(r.method)}</code> request ${verdict}. Anything waiting on it (a spinner, a list, a button) was stuck that long.</p>
+    <dl class="kv">
+      <dt>URL</dt><dd>${esc(r.url)}</dd>
+      <dt>Status</dt><dd>${r.status ?? '—'}</dd>
+      <dt>Size</dt><dd>${r.bytes != null ? `${Math.round(r.bytes / 1024)} KB` : '—'}</dd>
+    </dl>`,
+  );
+  if (r.source) codeCard(root, 'Requested from', r.source);
+  const related = relatedSection('While it was in flight', relatedAround(r.at, r.at + r.ms, r.id));
+  const requestLogs = logsSection(r.at - 2000, r.at + r.ms + 500);
+  if (related) root.append(related);
+  if (requestLogs) root.append(requestLogs);
+  frameList(root, r.frames, 'Call stack when it was sent');
+}
+
+function renderStartupDetail(root, s) {
+  const total = s.toSettleMs ?? s.toJsMs;
+  const js = s.toJsMs ?? 0;
+  const settle = s.toSettleMs != null ? s.toSettleMs - js : 0;
+  root.insertAdjacentHTML(
+    'beforeend',
+    `${header(`<sl-badge variant="primary">${s.kind === 'reload' ? 'Reload' : 'Cold launch'}</sl-badge>`, total != null ? (total / 1000).toFixed(1) : '—', 'seconds', `${clock(s.at)} · ${ago(s.at)}`)}
+    <p class="d-summary">${s.kind === 'reload' ? 'From the JS reload' : 'From the app process launching'} until the first screen started rendering took <strong>${s.toJsMs != null ? `${(s.toJsMs / 1000).toFixed(2)}s` : 'an unknown time'}</strong>${
+      s.settled ? `, then <strong>${(settle / 1000).toFixed(2)}s</strong> more until the JS and UI threads went quiet (the app settled).` : '. The app never settled within 30 seconds, so something kept the JS or UI thread busy.'
+    }</p>
+    <div class="startup-bar">
+      <i style="width:${total ? (js / total) * 100 : 0}%;background:var(--lane-ui)" title="until JS started"></i>
+      <i style="width:${total ? (settle / total) * 100 : 0}%;background:var(--lane-js)" title="until settled"></i>
+    </div>
+    <div class="cats" style="margin-top:6px"><span><i style="background:var(--lane-ui)"></i>bundle + native start</span><span><i style="background:var(--lane-js)"></i>first screens rendering and settling</span></div>`,
+  );
+  const freezes = state.stalls.filter(f => f.at >= s.at && f.at <= s.at + (total ?? 30000));
+  const related = relatedSection('Freezes during startup', freezes);
+  if (related) root.append(related);
+}
+
+// What the React probe saw: per component, renders (mounts), time, and why.
+function rendersSection(renders, title, hint) {
+  if (!renders?.commits) return null;
+  const node = section(title, hint);
+  node.insertAdjacentHTML(
+    'beforeend',
+    `<p class="d-summary">${renders.commits} commit${renders.commits === 1 ? '' : 's'}, <strong>${renders.renderMs}ms</strong> rendering, ${renders.rendered} component renders (${renders.mounts} mounts)${renders.avoidable ? `, <strong>${renders.avoidable} avoidable</strong>` : ''}.</p>`,
+  );
+  const list = el('div', 'renders');
+  for (const c of renders.components.slice(0, 10)) {
+    const row = el('div', 'render-row');
+    row.innerHTML = `<div class="render-head"><span class="fn">${esc(c.name)}</span><span class="render-nums">×${c.renders}${c.mounts ? ` · ${c.mounts} mounted` : ''} · ${c.ms}ms${c.avoidable ? ` · <span class="avoidable">${c.avoidable} avoidable</span>` : ''}</span></div>
+      ${c.reasons.length ? `<ul class="render-why">${c.reasons.map(r => `<li>${esc(r.text ?? r.reason)} <span class="menu-port">×${r.count}</span></li>`).join('')}</ul>` : ''}`;
+    list.append(row);
+  }
+  node.append(list);
+  if (renders.primitives?.length) {
+    node.insertAdjacentHTML('beforeend', `<p class="d-hint">Building blocks under them: ${renders.primitives.map(p => `${esc(p.name)} ×${p.renders}${p.avoidable ? ` (${p.avoidable} avoidable)` : ''}`).join(', ')}</p>`);
+  }
+  return node;
+}
+
+function renderJankDetail(root, j) {
+  root.insertAdjacentHTML(
+    'beforeend',
+    `${header('<sl-badge variant="warning">Choppy frames</sl-badge>', j.fps, 'fps', `${clock(j.at)}–${clock(j.until)} · ${ago(j.at)}`)}
+    <p class="d-summary">For <strong>${j.seconds}s</strong>${j.screen ? ` on <strong>${esc(j.screen)}</strong>` : ''} the JS thread managed about <strong>${j.fps} frame${j.fps === 1 ? '' : 's'} per second</strong> and dropped <strong>${j.dropped}</strong> frames that individual freezes don't account for${j.worstGapMs ? ` (longest hitch ${j.worstGapMs}ms)` : ''}. That's many small hitches, each under the freeze threshold, which together make scrolling and animations feel choppy.</p>`,
+  );
+  const renders = rendersSection(j.renders, 'What React rendered meanwhile');
+  if (renders) root.append(renders);
+  const freezes = relatedSection('Freezes in this period', state.stalls.filter(f => f.at >= j.at && f.at <= j.until));
+  if (freezes) root.append(freezes);
+  const logs = logsSection(j.at, j.until);
+  if (logs) root.append(logs);
+}
+
+function renderScreenDetail(root, sc) {
+  root.insertAdjacentHTML(
+    'beforeend',
+    `${header(`<sl-badge variant="${sc.issue ? 'warning' : 'primary'}">Screen load</sl-badge>`, (sc.ms / 1000).toFixed(1), `s · ${esc(sc.name)}`, `${clock(sc.at)} · ${ago(sc.at)}`)}
+    <p class="d-summary">From navigating to <strong>${esc(sc.name)}</strong> until React stopped re-rendering for a full second took <strong>${(sc.ms / 1000).toFixed(2)}s</strong>${sc.settled ? '' : ' (it never settled within 15s)'}: ${sc.commits} renders, ${sc.renderMs}ms of render time and ${sc.mounts} components mounted${sc.stalls ? `, with ${sc.stalls} JS freeze${sc.stalls === 1 ? '' : 's'}` : ''}.${sc.memoryAtStart && sc.memoryAtEnd ? ` App memory went from ${fmtMb(sc.memoryAtStart)} to ${fmtMb(sc.memoryAtEnd)}.` : ''}</p>`,
+  );
+  const renders = rendersSection(sc.renders, 'What React rendered while it loaded');
+  if (renders) root.append(renders);
+  const freezes = relatedSection('Freezes while it loaded', state.stalls.filter(f => f.at >= sc.at && f.at <= sc.at + sc.ms));
+  if (freezes) root.append(freezes);
+  const requests = relatedSection('Slow or failed requests while it loaded', state.requests.filter(r => r.issue && r.at >= sc.at && r.at <= sc.at + sc.ms));
+  if (requests) root.append(requests);
+}
+
+function renderLeakDetail(root, a) {
+  if (a.kind === 'reload') {
+    root.insertAdjacentHTML(
+      'beforeend',
+      `${header('<sl-badge variant="danger">Memory kept after reload</sl-badge>', `+${fmtMb(a.to - a.from)}`, '', `${clock(a.at)} · ${ago(a.at)}`)}
+      <p class="d-summary">A JS reload throws away the old JavaScript runtime, yet app memory went from <strong>${fmtMb(a.from)}</strong> to <strong>${fmtMb(a.to)}</strong> once the reload settled. Native resources the old JS created were never released: images, native views, animation or graphics engines (Rive, Skia, Lottie), players, or native module singletons.</p>
+      <p class="d-summary">Users rarely reload JS, but the same missing cleanup leaks whenever those screens unmount.</p>`,
+    );
+    return;
+  }
+  if (a.type === 'threadleak') {
+    root.insertAdjacentHTML(
+      'beforeend',
+      `${header('<sl-badge variant="danger">Threads piling up</sl-badge>', `+${a.to - a.from}`, 'threads in 3 min', `${clock(a.at)} · ${ago(a.at)}`)}
+      <p class="d-summary">The app went from <strong>${a.from}</strong> to <strong>${a.to}</strong> threads and kept climbing. Something keeps creating threads without ending them, usually a native module or SDK that starts a worker per call.</p>`,
+    );
+    if (a.grew.length) {
+      const node = section('Threads that grew');
+      node.insertAdjacentHTML('beforeend', shareRows(a.grew.map(g => ({ label: shortThreadName(g.name), pct: Math.min(100, g.added * 10), text: `+${g.added}`, color: COLORS.severe }))));
+      root.append(node);
+    }
+    return;
+  }
+  root.insertAdjacentHTML(
+    'beforeend',
+    `${header('<sl-badge variant="danger">Possible memory leak</sl-badge>', `${a.mbPerMin}`, 'MB per minute', `${clock(a.at)} · ${ago(a.at)}`)}
+    <p class="d-summary">${a.kind === 'heap' ? 'The JS heap' : 'The app\'s total memory'} grew from <strong>${fmtMb(a.from)}</strong> to <strong>${fmtMb(a.to)}</strong> over the last 3 minutes, and the low point after each garbage collection kept rising. Memory that survives GC like this is usually a leak: listeners, timers or subscriptions not cleaned up, or caches that only grow.</p>
+    <p class="d-summary">To pin it down, visit a screen and leave it a few times and watch the Memory lane. If it steps up each time and never comes back down, that screen is leaking.</p>`,
+  );
+}
+
+function renderHotDetail(root, hot) {
+  const top = hot.threads[0];
+  root.insertAdjacentHTML(
+    'beforeend',
+    `${header('<sl-badge variant="neutral">Threads hot</sl-badge>', top ? `${top.busyPct}%` : '—', top ? esc(shortThreadName(top.label)) : '', `${clock(hot.at)} · ${ago(hot.at)} · ${esc(hot.trigger)}`)}
+    <p class="d-summary">${
+      top
+        ? `Every native thread was sampled for 1 second. The busiest was <strong>${esc(shortThreadName(top.label))}</strong> at ${top.busyPct}%, mostly in <strong>${esc(top.categories[0]?.name ?? 'unknown')}</strong>.`
+        : 'The spike had already cooled when the sample ran; nothing stayed busy for the full second.'
+    }</p>`,
+  );
+  const node = section('Busy threads', '1s native sample');
+  for (const t of hot.threads) {
+    const card = el('sl-card', 'thread-card');
+    card.innerHTML = `<div class="tc-body">
+      <div class="tc-head"><span class="tc-name">${esc(shortThreadName(t.label))}</span><span class="tc-pct">${t.busyPct}%</span></div>
+      <div class="stackbar">${t.categories.map(c => `<i style="width:${c.pct}%;background:${CATEGORY_COLORS[c.name] ?? COLORS.other}"></i>`).join('')}</div>
+      <div class="cats">${t.categories.slice(0, 4).map(c => `<span><i style="background:${CATEGORY_COLORS[c.name] ?? COLORS.other}"></i>${esc(c.name)} ${c.pct}%</span>`).join('')}</div>
+      <ul class="frames">${t.frames.map(f => `<li><span class="fm">${f.ms}ms</span><span class="fn" title="${esc(f.name)}">${esc(f.name)} <span class="lib">${esc(f.lib ?? '')}</span>${f.via ? `<span class="via" title="${esc(f.via)}">called from ${esc(f.via)}</span>` : ''}</span></li>`).join('')}</ul>
+    </div>`;
+    node.append(card);
+  }
+  root.append(node);
+  $('#editor-btn').disabled = true;
+}
+
+// ---------------------------------------------------------------- actions
+
+function toast(text, variant = 'primary') {
+  const icon = { primary: 'info-circle', success: 'check2-circle', danger: 'exclamation-octagon' }[variant];
+  const alert = Object.assign(document.createElement('sl-alert'), { variant, closable: true, duration: 3500 });
+  alert.innerHTML = `<sl-icon slot="icon" name="${icon}"></sl-icon>${esc(text)}`;
+  document.body.append(alert);
+  alert.toast();
+}
+
+const post = (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) }).then(r => r.json());
+
+async function openEditor(file, line) {
+  const res = await post('/api/open', { file, line });
+  toast(res.error ? `Couldn't open editor: ${res.error}` : `Opened ${file}:${line} in ${res.editor}`, res.error ? 'danger' : 'success');
+}
+
+$('#copy-btn').addEventListener('click', async () => {
+  const res = await fetch(`/api/prompt?id=${state.selectedId}`).then(r => r.json());
+  await navigator.clipboard.writeText(res.prompt);
+  toast('Fix prompt copied. Paste it into any AI agent.', 'success');
+});
+
+$('#handoff-btn').addEventListener('click', async () => {
+  const button = $('#handoff-btn');
+  button.loading = true;
+  const res = await post('/api/handoff', { id: state.selectedId });
+  button.loading = false;
+  toast(res.error ? `Hand-off failed: ${res.error}` : 'Claude Code is opening in Terminal with the full context.', res.error ? 'danger' : 'success');
+});
+
+$('#reload-btn').addEventListener('click', async () => {
+  await post('/api/reload');
+  toast('Reloading the app…');
+});
+
+$('#pause-btn').addEventListener('click', togglePause);
+function togglePause() {
+  state.paused = !state.paused;
+  state.pausedAt = Date.now();
+  const button = $('#pause-btn');
+  button.variant = state.paused ? 'warning' : 'text';
+  $('.topbar').classList.toggle('paused', state.paused);
+  button.querySelector('sl-icon').name = state.paused ? 'play-fill' : 'pause-fill';
+  button.querySelector('span').textContent = state.paused ? 'Resume' : 'Pause';
+}
+
+$('#sample-btn').addEventListener('click', async () => {
+  await post('/api/sample');
+  toast('Sampling every thread for 1s…');
+});
+
+$('#window-select').addEventListener('sl-change', e => {
+  state.windowSec = Number(e.target.value);
+  layoutAt = 0;
+});
+
+$('#filter').addEventListener('sl-change', e => {
+  state.filter = e.target.value;
+  renderEvents();
+});
+
+$('#search').addEventListener('sl-input', e => {
+  state.search = e.target.value;
+  renderEvents();
+});
+
+$('#settings-btn').addEventListener('click', () => $('#settings').show());
+for (const [id, key] of [['#set-stall', 'stallMs'], ['#set-ui', 'uiHot'], ['#set-thread', 'threadHot'], ['#set-slow', 'slowRequestMs']]) {
+  $(id).addEventListener('sl-change', e => post('/api/settings', { [key]: Number(e.target.value) }).then(() => toast('Threshold updated', 'success')));
+}
+$('#report-btn').addEventListener('click', async () => {
+  const res = await post('/api/report');
+  toast(`Report saved: ${res.file}`, 'success');
+});
+// ---------------------------------------------------------------- runs
+
+function setRun(active) {
+  state.run = active;
+  const btn = $('#run-btn');
+  btn.querySelector('span').textContent = active ? `Stop "${active.name}"` : 'Record run';
+  btn.querySelector('sl-icon').name = active ? 'stop-circle-fill' : 'record-circle';
+  btn.variant = active ? 'danger' : 'text';
+}
+
+function showRunResult({ run, previous, comparison }) {
+  const s = run.summary;
+  const arrow = { better: '<span class="better">↓ better</span>', worse: '<span class="worse">↑ worse</span>', same: '≈ same' };
+  $('#run-dialog').label = `Run "${run.name}"`;
+  $('#run-result').innerHTML = `
+    <p class="d-summary">${s.seconds}s${run.git?.branch ? ` on <code>${esc(run.git.branch)}@${esc(run.git.commit)}</code>${run.git.dirty ? ' (uncommitted changes)' : ''}` : ''}: JS blocked <strong>${s.blockedMs}ms</strong> over ${s.stalls} freezes (worst ${s.worstStallMs}ms${s.devOnlyMs ? `, ${s.devOnlyMs}ms dev-only` : ''}), ${s.jankSeconds}s of choppy frames, ${s.errors} console errors.</p>
+    ${s.screens.length ? `<p class="d-summary">Screens: ${s.screens.map(sc => `${esc(sc.name)} ${(sc.ms / 1000).toFixed(1)}s`).join(', ')}</p>` : ''}
+    ${s.renders ? `<p class="d-summary">React: ${s.renders.renderMs}ms rendering, ${s.renders.mounts} mounts, ${s.renders.avoidable} avoidable re-renders.</p>` : ''}
+    ${
+      comparison
+        ? `<h3>Compared with the previous run <small>${esc(previous.git?.branch ?? '')}@${esc(previous.git?.commit ?? '')}</small></h3>
+           <p><strong>Overall: ${esc(comparison.verdict)}</strong></p>
+           <ul class="run-compare">${comparison.lines.map(l => `<li>${esc(l.label)}: ${l.before}${l.unit} → ${l.after}${l.unit} ${arrow[l.change]}</li>`).join('')}</ul>`
+        : '<p class="d-hint">The next run with this name will be compared with this one.</p>'
+    }`;
+  $('#run-dialog').show();
+}
+
+$('#run-dialog-close').addEventListener('click', () => $('#run-dialog').hide());
+$('#run-btn').addEventListener('click', async () => {
+  if (state.run) {
+    $('#run-btn').loading = true;
+    const res = await post('/api/run/stop', {});
+    $('#run-btn').loading = false;
+    if (res.error) toast(res.error, 'danger');
+    return;
+  }
+  const name = prompt('Name this run (runs with the same name are compared):', state.status?.screen ? `${state.status.screen}` : 'run');
+  if (!name) return;
+  const res = await post('/api/run/start', { name });
+  if (res.error) toast(res.error, 'danger');
+});
+fetch('/api/runs')
+  .then(r => r.json())
+  .then(r => setRun(r.active))
+  .catch(() => {});
+
+$('#reset-btn').addEventListener('click', async () => {
+  await post('/api/clear');
+  toast('Cleared. Still watching.', 'success');
+});
+
+$('#clear-btn').addEventListener('click', () => {
+  post('/api/clear');
+  $('#settings').hide();
+});
+
+document.addEventListener('keydown', e => {
+  if (e.target.closest?.('sl-input, sl-drawer')) return;
+  if (e.key === 'Escape') {
+    showList();
+  } else if (e.key === 'p') {
+    togglePause();
+  } else if (e.key === 'j' || e.key === 'k') {
+    const list = allEvents();
+    if (!list.length) return;
+    const index = list.findIndex(ev => ev.id === state.selectedId);
+    const next = e.key === 'j' ? Math.min(list.length - 1, index + 1) : Math.max(0, index - 1);
+    select(list[index === -1 ? 0 : next].id);
+  }
+});
+
+window.addEventListener('hashchange', () => {
+  const linked = Number(location.hash.match(/event=(\d+)/)?.[1]);
+  if (linked) select(linked);
+});
+
+setInterval(trimLanes, 5000);
+connect();
+requestAnimationFrame(draw);

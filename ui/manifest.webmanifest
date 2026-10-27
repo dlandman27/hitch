@@ -1,0 +1,15 @@
+{
+  "name": "Hitch",
+  "short_name": "Hitch",
+  "description": "Live slowdown watcher for React Native dev sessions.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0f14",
+  "theme_color": "#0b0f14",
+  "icons": [
+    { "src": "/brand/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/brand/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/brand/hitch-icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
