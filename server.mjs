@@ -151,7 +151,8 @@ export function startServer({ engine, port, onWindowsClosed }) {
       return range ? json(res, 200, { prompt: rangePrompt(range) }) : json(res, 400, { error: 'bad range' });
     }
 
-    if (url.pathname === '/api/prompt') {
+    // Only a finding's brief here; ?run= and ?compare= have their own handlers below.
+    if (url.pathname === '/api/prompt' && url.searchParams.has('id')) {
       const event = findEvent(Number(url.searchParams.get('id')));
       return event ? json(res, 200, { prompt: buildPrompt(withContext(event), root()) }) : json(res, 404, { error: 'unknown event' });
     }
