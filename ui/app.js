@@ -1248,14 +1248,15 @@ function renderStallDetail(root, stall) {
     : `The JS thread was busy for <strong>${stall.ms}ms</strong> without a break. It ended before a stack could be captured; the next one like it is usually caught.`;
   const repeat = same.length > 1 ? ` · <sl-badge variant="warning" pill>${same.length}× this session</sl-badge>` : '';
 
-  if (stall.stale) {
-    root.insertAdjacentHTML('beforeend', '<sl-alert open variant="warning" style="margin-bottom:var(--sl-spacing-medium)"><sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon><strong>Captured while the app ran older code.</strong> The file and line below may be wrong; reload the app and reproduce it.</sl-alert>');
-  }
   root.insertAdjacentHTML(
     'beforeend',
     `${header(`<sl-badge variant="${severe ? 'danger' : 'warning'}">JS freeze</sl-badge>`, stall.ms, 'ms blocked', `${clock(stall.at)} · ${ago(stall.at)}${repeat}`)}
     <p class="d-summary">${summary}</p>`,
   );
+
+  if (stall.stale) {
+    root.insertAdjacentHTML('beforeend', '<sl-alert open variant="warning" style="margin-top:12px"><sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon><strong>Captured while the app ran older code.</strong> The file and line below may be wrong; reload the app and reproduce it.</sl-alert>');
+  }
 
   const context = [
     stall.screen && `on the <strong>${esc(stall.screen)}</strong> screen`,

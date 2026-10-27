@@ -1668,3 +1668,227 @@ sl-tooltip::part(body) {
 .hover-tip {
   border: 1px solid rgb(255 255 255 / 0.12);
 }
+
+/* ---------- event pages: the same grouped language as the list ----------
+   A navigation bar (back, centered kind, info), a large number, then every
+   block as an inset grouped card on the grouped background, with hairline
+   separators inside. San Francisco for names; monospace only for code,
+   paths and logs. */
+.detail,
+.detail-scroll {
+  background: var(--bg-grouped);
+}
+
+.d-top {
+  position: relative;
+  min-height: 28px;
+  margin-bottom: 14px;
+}
+
+/* The kind reads as the page title, centered like an iOS navigation bar. */
+.d-top sl-badge {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.d-top sl-badge::part(base) {
+  padding: 0;
+  background: none;
+  color: var(--label);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.d-time {
+  color: var(--label-2);
+  font-size: 12px;
+}
+
+/* The explanation and other prose sit in a card. */
+.d-summary:not(.d-context) {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--cell);
+}
+
+.d-summary:not(.d-context) + .d-summary:not(.d-context) {
+  margin-top: 8px;
+}
+
+.d-context {
+  margin: 8px 2px 0;
+}
+
+.d-section {
+  margin-top: 22px;
+}
+
+.d-section > h3 {
+  padding: 0 2px;
+}
+
+/* Inside a section, the lead-in line is a caption above its list, not a card. */
+.d-section > .d-summary:not(.d-context) {
+  margin: 0 0 8px;
+  padding: 0 2px;
+  background: none;
+  color: var(--label-2);
+}
+
+.d-section > .d-summary strong {
+  color: var(--label);
+}
+
+/* Component chips as small grouped pills. */
+.chips sl-tag::part(base) {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--cell);
+  color: var(--label);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.chips sl-tag .menu-port {
+  margin-left: 6px;
+  color: var(--label-3);
+}
+
+.card-head sl-button {
+  min-width: 0;
+}
+
+.card-head sl-button::part(label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Grouped lists: React renders, stacks, related events, logs, shares. */
+.renders,
+.stack,
+.related,
+.log-lines,
+.share,
+.kv,
+.console-text {
+  border: 0;
+  border-radius: 10px;
+  background: var(--cell);
+}
+
+.renders {
+  gap: 0;
+  overflow: hidden;
+}
+
+.render-row {
+  position: relative;
+  border-radius: 0;
+  background: none;
+}
+
+.render-row + .render-row::before,
+.related > * + *::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 12px;
+  height: 1px;
+  background: var(--separator);
+}
+
+.render-head .fn,
+.card-head .fn {
+  font-family: var(--sl-font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--label);
+}
+
+.render-nums {
+  font-family: var(--sl-font-sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--label-2);
+}
+
+.render-why {
+  color: var(--label-2);
+}
+
+.stack li {
+  border-top-color: var(--separator);
+}
+
+.share {
+  padding: 10px 12px;
+}
+
+.log-lines {
+  padding: 6px 4px;
+}
+
+.kv {
+  padding: 10px 12px;
+}
+
+/* Related events: list rows with a chevron. */
+.related {
+  gap: 0;
+  overflow: hidden;
+}
+
+.related > sl-button {
+  position: relative;
+  width: 100%;
+}
+
+.related > sl-button::part(base) {
+  justify-content: flex-start;
+  width: 100%;
+  height: auto;
+  min-height: 40px;
+  padding: 0 30px 0 12px;
+  border-radius: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='13' viewBox='0 0 8 13'%3E%3Cpath d='M1.5 1.5l5 5-5 5' fill='none' stroke='%23636366' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 12px center;
+  color: var(--label);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.related > sl-button::part(base):hover {
+  background-color: #323234;
+}
+
+.related > sl-button::part(label) {
+  overflow: hidden;
+  padding: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The code card. */
+.detail sl-card::part(base) {
+  border: 0;
+  border-radius: 10px;
+  background: var(--cell);
+  box-shadow: none;
+}
+
+.detail sl-card::part(header) {
+  border-bottom: 1px solid var(--separator);
+}
+
+.card-head sl-button::part(base) {
+  color: var(--accent-text);
+}
+
+/* The hand-off bar at the bottom, like a toolbar. */
+.actions {
+  border-top: 1px solid rgb(0 0 0 / 0.5);
+  background: var(--toolbar);
+}
