@@ -2210,7 +2210,7 @@ $('#view-threads').addEventListener('click', e => {
   if (row) showThread(row.dataset.thread);
 });
 
-// ---------------------------------------------------------------- copy a view for Claude
+// ---------------------------------------------------------------- copy a view as a prompt
 
 let lastReact = null;
 const pctText = v => `${Math.round(v * 100)}%`;
@@ -2343,14 +2343,14 @@ async function copyView() {
     return;
   }
   await navigator.clipboard.writeText(text);
-  toast(`Copied the ${state.view} view as a prompt. Paste it to Claude.`, 'success');
+  toast(`Copied the ${state.view} page as a prompt.`, 'success');
 }
-// The copy button sits at the right of each view's title row: the first
+// "Copy page as prompt" sits at the right of each view's title row: the first
 // heading, or the toolbar row for Console and the bottom bar for Timeline.
 function copyButtonFor() {
-  const button = el('button', 'tb-btn view-copy', '<sl-icon name="clipboard-data"></sl-icon><span>Copy for Claude</span>');
+  const button = el('button', 'tb-btn view-copy', '<sl-icon name="clipboard-data"></sl-icon><span>Copy page as prompt</span>');
   button.type = 'button';
-  button.title = 'Copy this view as a prompt for Claude (⇧⌘C)';
+  button.title = 'Copy this page as a prompt for an AI agent (⇧⌘C)';
   button.addEventListener('click', copyView);
   return button;
 }
