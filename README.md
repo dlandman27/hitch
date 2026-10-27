@@ -1,27 +1,36 @@
 # Hitch
 
-**See what's slowing your React Native app down while you test it.** Every thread is shown as a live lane. Each freeze, hot thread, console error, slow request, startup and leak is pinned to the code responsible, and one click hands it to an AI agent to fix.
+**Find out why your React Native app is slow, while you use it.**
 
-Hitch runs **completely outside your app**. It connects the same way React Native DevTools does (through Metro's debugger link) and reads thread CPU and memory from your Mac. There is no SDK, no code change and nothing to install in the app, and it costs the app nothing while things are healthy.
+Hitch watches your app from the outside while you test it in the simulator. When the app freezes, stutters, re-renders too much, logs an error, waits on a slow request or leaks memory, Hitch catches it, points at the code responsible and explains why it happened. One click turns any of it into a prompt for an AI agent.
 
-```
-┌ Hitch ────── [my-app ▾ com.example.myapp · iPhone 16 Pro]     Live   JS heap 109 MB  App memory 541 MB  Threads 48 ┐
-│ THREADS                                                          │ CAPTURED                       [Everything ▾]  │
-│ ■ Main/UI thread ⓘ   ▁▁▂▁▇█▆▁▁▁▁▂▁▁                              │ ⛔ React render · PlayerMarketTile       790ms │
-│ ■ JS thread ⓘ        ▁▁[ 120ms ]▁▁▁▁                              │ ⚠  console.warn: Each child in a list…    ×4   │
-│ ■ Network ⓘ          ▬ ▬  ▬▬▬▬▬                                   │ ⌛ GET api…/bets/open                     2.3s │
-│ ■ Console ⓘ                ▲    ▲                                 │ 🚀 App reload                            5.1s │
-│ ■ Memory ⓘ           ╱╲__╱‾‾╲_╱‾                                  │ 📈 JS heap climbing 5.1 MB/min                 │
-│ ■ NSURLSession-work  ▁▁▁▁▆▆▆▁                                     │  … click any → what was running + Send to AI   │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-```
+There's nothing to add to your app: no SDK, no imports, no config. Hitch connects the way React Native DevTools does (through Metro's debugger) and reads thread CPU and memory from your Mac. It's free and open source (MIT), and runs on macOS.
+
+**What it catches**
+
+- **JS freezes** pinned to the file and line that blocked the thread, including short ones.
+- **What React rendered and why**: which components re-rendered during a freeze, how long they took, and the reason, down to "`style` was a new object with the same values" (avoidable) versus "the store changed".
+- **Choppy frames, slow screen loads and slow startups.**
+- **Native threads** running hot (UI thread, GC, SDKs), with their hottest functions.
+- **Console errors and warnings**, grouped and readable, plus every plain log line.
+- **Network requests**, with their response and request bodies and headers; credentials are always hidden.
+- **Memory and thread leaks**, heap snapshots and what grew between two of them.
+
+**How you use it**
+
+- A live Mac window: a timeline you can drag across to inspect any slice, plus Threads, Console, Network, Memory, React and Runs views.
+- **Send to Claude Code** or **Copy prompt** on anything it catches; **Copy page as prompt** on every view.
+- An **MCP server**, so a coding agent can read what Hitch saw, profile, and check its own fixes.
+- **Runs**: record an interaction, change the code, record it again and see what got better.
 
 ---
 
 ## Contents
 
-- [Setup](#setup)
+- [Requirements](#requirements)
+- [Install](#install)
 - [Quick start](#quick-start)
+- [Privacy](#privacy)
 - [A tour of the window](#a-tour-of-the-window)
 - [What it tracks and how](#what-it-tracks-and-how)
 - [Handing issues to an AI](#handing-issues-to-an-ai)
@@ -36,16 +45,13 @@ Hitch runs **completely outside your app**. It connects the same way React Nativ
 
 ---
 
-## Setup
+## Requirements
 
-**You need**
+- **macOS** with Xcode and its command-line tools.
+- **Node 22** or newer. Hitch has no npm dependencies.
+- A React Native app on **Hermes** (React Native 0.73 or newer), run as a **dev build** through Metro, in the iOS simulator for the full picture. Phones work too, with less detail ([see below](#testing-on-a-real-iphone)).
 
-- macOS with Xcode and its command-line tools (`xcrun simctl`, `xcrun xctrace`, `xcrun devicectl`)
-- Node 22 or newer (Hitch has no npm dependencies)
-- Google Chrome, which Hitch uses to open its window as a standalone app. Without it, Hitch opens your default browser.
-- A React Native app on **Hermes** with the modern debugger (RN 0.73+) that you run as a **dev build** through Metro
-
-**Install once**
+## Install
 
 ```bash
 git clone https://github.com/dlandman27/hitch.git ~/hitch
@@ -53,16 +59,15 @@ cd ~/hitch
 npm link          # puts `hitch` on your PATH
 ```
 
-To update later, run `git pull`; there's nothing to rebuild. To uninstall, run `npm unlink -g hitch`.
-
-**Optional: a Mac app.** To start Hitch from the Dock, Spotlight or Launchpad instead of a terminal:
+**Recommended: the Mac app.** It gives Hitch its own window, Dock icon and Cmd-Tab entry:
 
 ```bash
 hitch --install-app       # builds ~/Applications/Hitch.app (needs Xcode's command-line tools)
 ```
 
-Hitch.app is a native window with its own Dock icon, Cmd-Tab entry and Cmd-Q. Opening it starts Hitch, or shows the one already running, and `hitch` in a terminal opens it too. Quitting the app (or closing its window) stops the Hitch it started and saves the report. Output goes to `~/.hitch/app.log`. The app runs this checkout, so `git pull` updates it; rerun `--install-app` if you move the repo or after pulling changes to `mac/HitchApp.swift`. To remove it, delete `~/Applications/Hitch.app`.
+Opening Hitch.app starts Hitch, or shows the one already running, and `hitch` in a terminal opens it too. Quitting it stops Hitch and saves the report. Its output goes to `~/.hitch/app.log`. The app runs your clone, so `git pull` updates it; rerun `--install-app` if you move the folder or after updates that change `mac/HitchApp.swift`. Without the Mac app, Hitch opens a Chrome app window (or your default browser).
 
+To update, run `git pull`; there's nothing to build. To uninstall, run `npm unlink -g hitch` and delete `~/Applications/Hitch.app`.
 
 ---
 
@@ -70,16 +75,31 @@ Hitch.app is a native window with its own Dock icon, Cmd-Tab entry and Cmd-Q. Op
 
 ```bash
 # 1. Run your app as usual
-yarn start                 # Metro
-yarn ios                   # app in the simulator
+npx expo start            # or: yarn start
+#    then open it in the iOS simulator
 
-# 2. In another terminal, anywhere
+# 2. Start Hitch (open Hitch.app, or in another terminal:)
 hitch
 ```
 
-A window opens and attaches to your app. Use the app normally and slowdowns appear as they happen. Press **Ctrl-C** in the terminal to quit; a report is saved to `~/.hitch/<time>/`.
+Hitch finds Metro, attaches to your app and starts watching. Use the app normally: freezes, warnings and slow requests appear on the right as they happen. Click one to see what was running and why.
 
-If you run several Metro servers (different projects or ports), Hitch finds all of them. Switch between them, and between apps and devices, from the dropdown in the top-left corner.
+A few things to try first:
+
+- **Drag across the timeline** over a moment that felt slow to see everything that happened in it.
+- Open the **React** view to see which components render most, and which re-renders could be avoided.
+- Press **Record**, do an interaction, press Stop. Change your code and record it again under the same name to compare.
+
+If you run several Metro servers, Hitch finds all of them; switch between projects, apps and devices from the app picker in the toolbar.
+
+---
+
+## Privacy
+
+- **Everything stays on your Mac.** Hitch talks to your app's Metro on localhost and serves its window on `127.0.0.1`. It sends nothing anywhere.
+- **Credentials are hidden** before anything is stored or shown: auth, cookie, API-key, app-check and signature headers, and password or token fields in JSON bodies.
+- **Response bodies stay in memory** for the last 150 requests and are never written to saved session files.
+- **AI hand-off only happens when you ask:** Send to Claude Code opens Claude Code on your machine with a prompt; Copy puts it on your clipboard.
 
 ---
 
@@ -87,35 +107,37 @@ If you run several Metro servers (different projects or ports), Hitch finds all 
 
 Hover any **ⓘ** for a plain-language explanation of what that part shows and how it's measured.
 
-### Views
+### Toolbar
 
-The left panel has a view switcher next to the vitals:
+| | |
+|---|---|
+| **Pause · Sample** | Pause (`P`) freezes the timeline so you can inspect it; data keeps being collected. Sample records every native thread for 1 second right now. |
+| **Project and status** | The project being watched, whether it's live, and the screen the app is on. |
+| **App › device** | Every Metro dev server on your Mac and the apps connected to it (simulator and phones separately), plus iPhones plugged in over USB. Pick one to watch it. |
+| **⚠ count** | How many findings were caught; click it to show them all. |
+| **15s · 30s · 1m · 3m** | How much history the timeline shows. |
+| **Record · Reload · Clear** | Record a named run; reload the app's JS; clear everything shown (Hitch keeps watching). |
+| **•••** | The same actions, plus Save report and Settings (thresholds for freezes, hot threads and slow requests). |
+
+The toolbar collapses as the window narrows: the time window moves into •••, then the count and device name hide.
+
+### Views (left)
+
+The left panel has a view switcher next to the app's vitals (JS heap, app memory, threads, last startup). Every view has **Copy page as prompt** at the right of its title, which copies what you're looking at as a ready-to-paste prompt for an AI agent (also ⇧⌘C).
 
 | View | What it shows |
 |---|---|
 | **Timeline** | Thread lanes, network, console and memory over the last 15s–3m, with the screen the app was on along the top. **Drag across the lanes** to select a range: the lanes pause and the right side shows everything in that slice (freezes, what React rendered and why, busiest threads, requests, console, logs, memory), ready to send to Claude Code like any event. |
-| **Threads** | Every thread with its CPU now, on average and at peak, and a sparkline. |
-| **Console** | Every line the app logged, filterable by level and text. Click a warning or error to open it; click any other line to jump the timeline to that moment. |
+| **Threads** | Every thread with its CPU now, on average and at peak, and a sparkline. Click one for what it does, its CPU history, native samples and the freezes it was busy during. |
+| **Console** | Every line the app logged, filterable by level and text. Click a warning or error to open its finding; click any other line to read it in full, with what happened around it. |
 | **Network** | A waterfall of recent requests with status and time; slow and failed ones stand out. Click one to see its response body (pretty-printed JSON) and headers, and the request's headers and body. Credentials (auth headers, cookies, API keys, app-check and signature headers, password and token fields) are always shown as hidden; bodies are kept in memory for the last 150 requests and never saved to session files. |
 | **Memory** | The whole session's JS heap, app memory and thread count, with launches, reloads, screens and leak alerts marked; plus heap snapshots and a comparison of what grew between two of them. |
 | **React** | Each commit's render time over the last two minutes, where render time went, and the session's avoidable re-renders. |
 | **Runs** | Recorded runs, each compared with the previous run of the same name. |
 
-### Top bar
+### The timeline
 
-| | |
-|---|---|
-| **Project ▾** | Every Metro dev server on your Mac, its folder, and the apps connected to it (simulator and phone listed separately), plus any iPhone plugged in over USB. Pick one to watch it. Source maps and AI hand-off follow the selected project. |
-| **Status** | Live, Waiting for app, Reconnecting (after a reload), No Metro running, or Saved session. |
-| **Vitals** | JS heap, app memory, thread count (each with its change over the last 2 minutes) and the last startup time. |
-| **15s · 30s · 1m · 3m** | How much history the lanes show. |
-| **Pause** (`P`) | Freezes the lanes so you can inspect them. Data keeps being collected. |
-| **Sample threads** | Samples every native thread for 1 second right now. |
-| **Settings** | Thresholds (freeze ms, UI-thread %, any-thread %, slow-request ms), save a report, clear events. |
-
-### Threads (left)
-
-One lane per thread, refreshed every 50ms. A taller bar means a busier thread.
+One lane per thread, refreshed every 50ms; a taller bar means a busier thread. The screen the app was on runs along the top, and hovering shows the exact time.
 
 - **Main/UI thread:** touches, layout, native views and animations. When it's busy, the screen stutters.
 - **JS thread:** your React and JS code. **Boxed blocks are freezes**: click one to see what was running.
@@ -125,11 +147,11 @@ One lane per thread, refreshed every 50ms. A taller bar means a busier thread.
 - **Memory:** green is the JS heap, blue is total app memory. Red ticks are leak warnings.
 - **Other threads:** SDKs (Datadog, Sentry, Firebase…), networking and the worker pool, shown when active. Idle threads collapse into a row you can expand.
 
-**Pink-striped areas** mark moments when every native thread was sampled.
+**Pink-striped areas** mark moments when every native thread was sampled. **Drag across the lanes** to select a slice: the timeline pauses and the right side shows everything in it.
 
 ### Captured (right)
 
-Everything Hitch caught, newest first. Filter it with the dropdown (JS freezes, Hot threads, Console errors and warnings, errors only or warnings only, Slow & failed requests, Startups, Leaks) and narrow it with the search box, which matches messages, URLs, function names and files. Click an item for its detail view:
+Everything Hitch caught, newest first. Filter it with the dropdown (JS freezes, hot threads, console errors and warnings, slow and failed requests, startups, leaks, choppy frames, screen loads, or everything except dev-only tooling) and narrow it with the search box, which matches messages, URLs, function names and files. Click an item for its page:
 
 - **JS freeze:**
   - a plain-English diagnosis (a React render or commit, time inside a library, or dev-only tooling);
@@ -137,7 +159,9 @@ Everything Hitch caught, newest first. Filter it with the dropdown (JS freezes, 
   - the React components that were rendering, the call stack (your code highlighted, libraries folded) and what else happened around that moment.
 - **Hot threads:** each busy thread's time by subsystem (Yoga layout, mounting, CoreAnimation, SDKs, GC) and its hottest native functions.
 - **Console:** the full message, the line that logged it and its stack, each with a copy button. Messages show the way DevTools would: `%s`-style placeholders filled in (so React warnings name the component), objects by their contents and errors by name and message. Repeats of the same message are grouped even when ids, numbers or timestamps in it change, with first-seen and last-seen times and the latest version of the text.
-- **Request:** URL, status, size, the code that sent it, and what happened while it was in flight.
+- **Request:** URL, status, size, the response body (pretty-printed) and headers, the request's headers and body, the code that sent it, and what happened while it was in flight.
+- **Choppy frames:** how many frames dropped outside freezes, and what React rendered meanwhile.
+- **Screen load:** how long a screen took to settle, its renders and mounts, and the freezes and requests while it loaded.
 - **Startup:** the reload or launch broken into time until the first screen rendered and time until the app settled.
 - **Leak:** how fast memory or the thread count is climbing, and which threads grew.
 
@@ -183,6 +207,7 @@ Every item in the detail view has:
 
 - **Send to Claude Code:** opens Terminal in the project folder and starts `claude` with a complete bug report: the diagnosis, measurements, highlighted code, call stack, history ("happened 6× this session") and fix steps tailored to the issue type. Reports are also saved in `~/.hitch/handoffs/`.
 - **Copy prompt:** the same report on your clipboard, for any agent.
+- **Copy page as prompt** (on every view) and **Copy** (on log and thread pages): the data you're looking at, ready to paste.
 - **Open in editor** (↗): jumps to the line in Cursor or VS Code. Set `HITCH_EDITOR=code` (or `cursor`, `webstorm`…) to choose.
 
 ### Let an agent ask Hitch directly (MCP)
@@ -212,7 +237,7 @@ An agent working in your app's repo can then ask what Hitch saw and check its ow
 | `hitch_clear` · `hitch_reload_app` | Start fresh and reload the JS, to check whether a change helped |
 | `hitch_save_report` | Write the report to `~/.hitch` now |
 
-The window has **Record run** in the toolbar for the same thing by hand. Runs are saved in `~/.hitch/runs/<name>/`, scenarios in `~/.hitch/scenarios/`. A single run of the same code can vary by 2× in a dev build, so compare scenarios played several times rather than one-off runs.
+The window has **Record** in the toolbar for the same thing by hand. Runs are saved in `~/.hitch/runs/<name>/`, scenarios in `~/.hitch/scenarios/`. A single run of the same code can vary by 2× in a dev build, so compare scenarios played several times rather than one-off runs.
 
 It only answers on this Mac: it listens on `127.0.0.1` and refuses requests from web pages. This repo also ships agent definitions in `.claude/agents/`; to use the findings reader from your app's repo, copy `hitch-reader.md` to `~/.claude/agents/`. See [AGENTS.md](AGENTS.md).
 
@@ -245,7 +270,7 @@ Release builds strip JS function names, console and network reporting, so those 
 
 **One-time signing setup.** The phone build has to be development-signed by your app's team:
 
-1. **Xcode → Settings → Accounts**: sign in with your work Apple ID (re-enter the password if it shows a warning).
+1. **Xcode → Settings → Accounts**: sign in with your Apple ID (re-enter the password if it shows a warning).
 2. Select your team → **Manage Certificates… → + → Apple Development** → Done.
 
 **Build and install** (command-line overrides only; no project files change):
@@ -277,7 +302,7 @@ When you quit, if anything was caught, Hitch writes `~/.hitch/<time>/report.md` 
 hitch --open ~/.hitch/<time>/session.json
 ```
 
-**Settings → Save report** writes a report at any time.
+**••• → Save report** writes a report at any time.
 
 ---
 
@@ -302,7 +327,7 @@ hitch [options]
 
 If Hitch is already running on the port, `hitch` opens a window onto that one instead of starting a second.
 
-Most thresholds can also be changed live in **Settings**.
+Most thresholds can also be changed live in **••• → Settings**.
 
 ---
 
@@ -319,6 +344,7 @@ Most thresholds can also be changed live in **Settings**.
 
 ## Limits
 
+- **macOS only.** Android thread lanes (over adb) are included but haven't been tested on a device yet; the debugger-based parts (freezes, console, network, React) work the same.
 - **Dev builds are slower than production.** Absolute times are inflated; the ranking and the culprits are real, and dev-only work is labelled.
 - **Network:** apps whose global `fetch` is Expo's native implementation don't report those requests to the debugger, so RTK Query and plain `fetch` calls won't appear. XHR and axios do.
 - **Native lanes need the simulator.** On a phone, use Option A for JS detail or Option B for native threads.
