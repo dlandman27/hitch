@@ -232,7 +232,7 @@ h2 {
 }
 
 #run-btn.recording {
-  background: var(--accent);
+  background: var(--sys-red);
   color: #fff;
 }
 
@@ -482,7 +482,8 @@ sl-dropdown[open] .tb-capsule {
 }
 
 .tb-segmented sl-radio-button[checked]::part(button) {
-  background: var(--accent);
+  /* Native toolbars mark the chosen segment in gray; blue is for actions. */
+  background: #636366;
   color: var(--label);
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
 }
