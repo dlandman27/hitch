@@ -257,7 +257,7 @@ h2 {
   font-size: 17px;
 }
 
-/* Title and status, like Xcode's "taild / Build Succeeded · 1:07 PM". */
+/* Title and status, like Xcode's "MyApp / Build Succeeded · 1:07 PM". */
 .tb-title {
   display: flex;
   flex: 0 1 auto;
