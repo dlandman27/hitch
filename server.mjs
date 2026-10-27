@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 import { buildPrompt, openInEditor, readSource, sendToClaude } from './handoff.mjs';
 import { createMcp } from './mcp.mjs';
+import { avoidableRows } from './engine.mjs';
+import { rangePrompt, summarizeRange } from './range.mjs';
 import { compareRuns, createRuns } from './runs.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
@@ -98,13 +100,67 @@ export function startServer({ engine, port, onWindowsClosed }) {
       );
     }
 
+    // A slice of the timeline: what happened between two moments.
+    const rangeOf = params => {
+      const from = Number(params.from);
+      const to = Number(params.to);
+      return Number.isFinite(from) && Number.isFinite(to) && to > from ? summarizeRange(engine.history(), from, to, engine.renders?.(from, to)) : null;
+    };
+
+    if (url.pathname === '/api/range') {
+      const range = rangeOf(Object.fromEntries(url.searchParams));
+      return range ? json(res, 200, range) : json(res, 400, { error: 'from and to are required' });
+    }
+
+    if (url.pathname === '/api/react') {
+      const seconds = Math.min(120, Number(url.searchParams.get('seconds')) || 60);
+      const to = Date.now();
+      return json(res, 200, { commits: engine.reactCommits?.() ?? [], summary: engine.renders?.(to - seconds * 1000, to) ?? null, avoidable: avoidableRows(engine.history().stalls ?? []), probe: engine.status().health?.probe ?? 'off' });
+    }
+
+    if (url.pathname === '/api/heap') {
+      return json(res, 200, { snapshots: engine.heapLabels?.() ?? [] });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/heap/snapshot') {
+      const { label } = await readBody(req);
+      return Promise.resolve(engine.heapSnapshot?.(String(label || 'snapshot')))
+        .then(
+          summary => json(res, 200, { label: summary.label, count: summary.count, size: summary.size, groups: summary.groups.slice(0, 15) }),
+          error => json(res, 500, { error: error.message }),
+        );
+    }
+
+    if (url.pathname === '/api/heap/diff') {
+      try {
+        const diff = engine.heapDiff(url.searchParams.get('before'), url.searchParams.get('after'));
+        return json(res, 200, { countDelta: diff.countDelta, sizeDelta: diff.sizeDelta, grew: diff.grew });
+      } catch (error) {
+        return json(res, 400, { error: error.message });
+      }
+    }
+
+    if (url.pathname === '/api/prompt' && url.searchParams.has('from')) {
+      const range = rangeOf(Object.fromEntries(url.searchParams));
+      return range ? json(res, 200, { prompt: rangePrompt(range) }) : json(res, 400, { error: 'bad range' });
+    }
+
     if (url.pathname === '/api/prompt') {
       const event = findEvent(Number(url.searchParams.get('id')));
       return event ? json(res, 200, { prompt: buildPrompt(withContext(event), root()) }) : json(res, 404, { error: 'unknown event' });
     }
 
     if (req.method === 'POST' && url.pathname === '/api/handoff') {
-      const { id } = await readBody(req);
+      const body = await readBody(req);
+      const { id } = body;
+      if (body.from != null) {
+        const range = rangeOf(body);
+        if (!range) return json(res, 400, { error: 'bad range' });
+        return sendToClaude(rangePrompt(range), root(), `range-${range.from}-${Date.now()}`).then(
+          file => json(res, 200, { file }),
+          error => json(res, 500, { error: error.message }),
+        );
+      }
       const event = findEvent(id);
       if (!event) return json(res, 404, { error: 'unknown event' });
       const prompt = buildPrompt(withContext(event), root());

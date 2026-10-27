@@ -142,6 +142,9 @@ const state = {
   jank: [],
   screens: [],
   run: null,
+  range: null,
+  drag: null,
+  view: 'timeline',
   servers: [],
   current: null,
   status: null,
@@ -274,6 +277,7 @@ function connect() {
     } else if (event.type === 'run') {
       setRun(event.active);
       if (event.finished) showRunResult(event.finished);
+      if (state.view === 'runs') viewRenderers.runs();
     } else if (event.type === 'cleared') {
       state.coverage = [];
       state.lanes.clear();
@@ -443,7 +447,10 @@ $('#target-list').addEventListener('sl-select', async e => {
 const canvas = $('#lanes');
 const ctx = canvas.getContext('2d');
 const LABEL_W = 210;
-const AXIS_H = 28;
+// Time labels on top, then a strip naming the screen the app was on.
+const AXIS_H = 46;
+const TIME_Y = 11;
+const SCREEN_Y = 31;
 const BIG_ROW = 50;
 const ROW = 26;
 const IDLE_ROW = 26;
@@ -568,7 +575,7 @@ function draw() {
     ctx.fillRect(Math.round(x), AXIS_H, 1, height - AXIS_H);
     ctx.fillStyle = INK.muted;
     ctx.textAlign = s === 0 ? 'right' : 'center';
-    ctx.fillText(s === 0 ? (state.paused ? 'paused' : state.status?.release ? 'latest' : 'now') : `-${s}s`, x, AXIS_H / 2);
+    ctx.fillText(s === 0 ? (state.paused ? 'paused' : state.status?.release ? 'latest' : 'now') : `-${s}s`, x, TIME_Y);
   }
 
   // Phone streaming records in chunks; mark what wasn't recorded so a gap
@@ -713,13 +720,82 @@ function draw() {
     }
   }
 
-  // hover crosshair
-  if (state.hover && state.hover.x > trackX) {
+  drawScreens({ from, to, trackX, trackW, xOf });
+
+  // A selected range (being dragged, or open on the right).
+  const sel = state.drag ?? state.range;
+  if (sel) {
+    const x0 = Math.max(trackX, xOf(sel.from));
+    const x1 = Math.min(trackX + trackW, xOf(sel.to));
+    if (x1 > x0) {
+      ctx.fillStyle = COLORS.ui;
+      ctx.globalAlpha = 0.12;
+      ctx.fillRect(x0, AXIS_H, x1 - x0, layout.height - AXIS_H);
+      ctx.globalAlpha = 0.9;
+      ctx.fillRect(x0, AXIS_H, 1.5, layout.height - AXIS_H);
+      ctx.fillRect(x1 - 1.5, AXIS_H, 1.5, layout.height - AXIS_H);
+      ctx.globalAlpha = 1;
+      const label = `${((sel.to - sel.from) / 1000).toFixed(1)}s`;
+      ctx.font = `600 10.5px ${FONT_SANS}`;
+      ctx.textAlign = 'center';
+      pill(label, (x0 + x1) / 2, SCREEN_Y, COLORS.ui, '#fff');
+    }
+  }
+
+  // hover crosshair, with the time it points at
+  if (state.hover && state.hover.x > trackX && !state.drag) {
+    const x = Math.round(state.hover.x);
     ctx.fillStyle = INK.muted;
-    ctx.fillRect(Math.round(state.hover.x), AXIS_H, 1, layout.height - AXIS_H);
+    ctx.fillRect(x, AXIS_H, 1, layout.height - AXIS_H);
+    const t = from + ((x - trackX) / trackW) * (to - from);
+    ctx.font = `600 10.5px ${FONT_SANS}`;
+    ctx.textAlign = 'center';
+    pill(clock(t), Math.min(Math.max(x, trackX + 30), trackX + trackW - 30), TIME_Y, '#48484a', '#fff');
   }
 
   requestAnimationFrame(draw);
+}
+
+// A small rounded label centered on x (font and alignment set by the caller).
+function pill(text, x, cy, fill, color) {
+  const w = ctx.measureText(text).width + 12;
+  ctx.fillStyle = fill;
+  roundRect(x - w / 2, cy - 8, w, 16, 8);
+  ctx.fill();
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, cy + 0.5);
+}
+
+// Which screen the app was on: a label where each screen began, and a faint
+// line down through the lanes so freezes can be read against it.
+function drawScreens({ from, to, trackX, trackW, xOf }) {
+  const changes = [...state.screens].sort((a, b) => a.at - b.at);
+  const before = changes.filter(sc => sc.at < from).at(-1);
+  const inView = changes.filter(sc => sc.at >= from && sc.at <= to);
+  ctx.font = `500 10.5px ${FONT_SANS}`;
+  ctx.textAlign = 'left';
+  let labelEnd = -Infinity;
+  const label = (name, x) => {
+    const text = name;
+    const w = ctx.measureText(text).width + 14;
+    if (x < labelEnd + 6 || x + w > trackX + trackW) return;
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    roundRect(x, SCREEN_Y - 8, w, 16, 5);
+    ctx.fill();
+    ctx.fillStyle = INK.label;
+    ctx.fillText(text, x + 7, SCREEN_Y + 0.5);
+    labelEnd = x + w;
+  };
+  const current = before?.name ?? (inView.length ? null : state.status?.screen);
+  if (current) label(current, trackX + 2);
+  for (const sc of inView) {
+    const x = xOf(sc.at);
+    ctx.fillStyle = INK.muted;
+    ctx.globalAlpha = 0.35;
+    ctx.fillRect(Math.round(x), SCREEN_Y + 8, 1, layout.height - SCREEN_Y - 8);
+    ctx.globalAlpha = 1;
+    label(sc.name, x + 3);
+  }
 }
 
 function infoGlyph(x, cy) {
@@ -868,6 +944,38 @@ function hitTest(x, y) {
   return { t, row, stall, hot, item };
 }
 
+// Drag across the lanes to select a range; it pauses the lanes and opens a
+// page for that slice. A plain click still opens what's under the pointer.
+let dragStart = null;
+let suppressClick = false;
+const timeAtX = x => {
+  const [from, to] = viewRange();
+  return from + ((x - LABEL_W) / (canvas.clientWidth - LABEL_W - 14)) * (to - from);
+};
+canvas.addEventListener('mousedown', e => {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  if (e.button !== 0 || x <= LABEL_W) return;
+  dragStart = { x, t: timeAtX(x) };
+});
+window.addEventListener('mousemove', e => {
+  if (!dragStart) return;
+  const x = e.clientX - canvas.getBoundingClientRect().left;
+  if (!state.drag && Math.abs(x - dragStart.x) < 5) return;
+  if (!state.drag && !state.paused) togglePause();
+  const t = timeAtX(Math.max(LABEL_W, Math.min(x, canvas.clientWidth - 14)));
+  state.drag = { from: Math.min(dragStart.t, t), to: Math.max(dragStart.t, t) };
+});
+window.addEventListener('mouseup', () => {
+  if (state.drag && state.drag.to - state.drag.from > 100) {
+    const range = state.drag;
+    suppressClick = true;
+    showRange(range.from, range.to);
+  }
+  state.drag = null;
+  dragStart = null;
+});
+
 canvas.addEventListener('mousemove', e => {
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
@@ -923,6 +1031,10 @@ canvas.addEventListener('mouseleave', () => {
 });
 
 canvas.addEventListener('click', e => {
+  if (suppressClick) {
+    suppressClick = false;
+    return;
+  }
   const rect = canvas.getBoundingClientRect();
   const { row, stall, hot, item } = hitTest(e.clientX - rect.left, e.clientY - rect.top);
   if (row?.idleToggle) {
@@ -1100,6 +1212,7 @@ setInterval(() => {
 function select(id) {
   const event = findEvent(id);
   if (!event) return;
+  state.range = null;
   state.selectedId = id;
   renderEvents();
   $('#list-panel').hidden = true;
@@ -1109,6 +1222,7 @@ function select(id) {
 
 function showList() {
   state.selectedId = null;
+  state.range = null;
   $('#detail-panel').hidden = true;
   $('#list-panel').hidden = false;
   renderEvents();
@@ -1627,7 +1741,8 @@ async function openEditor(file, line) {
 }
 
 $('#copy-btn').addEventListener('click', async () => {
-  const res = await fetch(`/api/prompt?id=${state.selectedId}`).then(r => r.json());
+  const query = state.range ? `from=${Math.round(state.range.from)}&to=${Math.round(state.range.to)}` : `id=${state.selectedId}`;
+  const res = await fetch(`/api/prompt?${query}`).then(r => r.json());
   await navigator.clipboard.writeText(res.prompt);
   toast('Fix prompt copied. Paste it into any AI agent.', 'success');
 });
@@ -1635,7 +1750,7 @@ $('#copy-btn').addEventListener('click', async () => {
 $('#handoff-btn').addEventListener('click', async () => {
   const button = $('#handoff-btn');
   button.loading = true;
-  const res = await post('/api/handoff', { id: state.selectedId });
+  const res = await post('/api/handoff', state.range ? { from: Math.round(state.range.from), to: Math.round(state.range.to) } : { id: state.selectedId });
   button.loading = false;
   toast(res.error ? `Hand-off failed: ${res.error}` : 'Claude Code is opening in Terminal with the full context.', res.error ? 'danger' : 'success');
 });
@@ -1788,6 +1903,424 @@ window.addEventListener('hashchange', () => {
   const linked = Number(location.hash.match(/event=(\d+)/)?.[1]);
   if (linked) select(linked);
 });
+
+// ---------------------------------------------------------------- range
+
+// A slice of the timeline, opened on the right like an event.
+async function showRange(from, to) {
+  state.selectedId = null;
+  state.range = { from, to };
+  renderEvents();
+  $('#list-panel').hidden = true;
+  $('#detail-panel').hidden = false;
+  const root = $('#detail');
+  root.replaceChildren();
+  headerType = null;
+  root.insertAdjacentHTML('beforeend', header('<sl-badge variant="primary">Selected range</sl-badge>', ((to - from) / 1000).toFixed(1), 'seconds', `${clock(from)}–${clock(to)}`));
+  root.querySelector('.back').addEventListener('click', showList);
+  $('#editor-btn').disabled = true;
+  const range = await fetch(`/api/range?from=${Math.round(from)}&to=${Math.round(to)}`).then(r => r.json()).catch(() => null);
+  if (!range || state.range?.from !== from) return;
+  renderRangeDetail(root, range);
+}
+
+function renderRangeDetail(root, r) {
+  const errors = r.console.filter(c => c.level === 'error').length;
+  const issues = r.requests.filter(q => q.issue);
+  const facts = [
+    r.stalls.length
+      ? `the JS thread was blocked <strong>${r.blockedMs}ms</strong> over ${r.stalls.length} freeze${r.stalls.length === 1 ? '' : 's'}${r.devOnlyMs ? ` (${r.devOnlyMs}ms dev-only)` : ''}`
+      : 'the JS thread never froze',
+    r.jank.length && `frames were choppy for ${r.jank.reduce((sum, j) => sum + j.seconds, 0)}s`,
+    r.renders && `React rendered for <strong>${r.renders.renderMs}ms</strong> across ${r.renders.commits} commits${r.renders.avoidable ? `, ${r.renders.avoidable} of them avoidable re-renders` : ''}`,
+    r.requests.length && `${r.requests.length} request${r.requests.length === 1 ? '' : 's'}${issues.length ? `, ${issues.length} slow or failed` : ''}`,
+    (errors || r.console.length) && `${errors} console error${errors === 1 ? '' : 's'} and ${r.console.length - errors} warning${r.console.length - errors === 1 ? '' : 's'}`,
+  ].filter(Boolean);
+  root.insertAdjacentHTML('beforeend', `<p class="d-summary">In these ${r.seconds} seconds${r.screens.length ? ` (${r.screens.map(sc => esc(sc.name)).join(' → ')})` : ''}, ${facts.join('; ')}.</p>`);
+
+  if (r.memory?.heapFrom != null) {
+    const node = section('Memory');
+    node.insertAdjacentHTML(
+      'beforeend',
+      `<div class="stat-row">
+        <div class="stat"><div class="k">JS heap</div><div class="v">${fmtMb(r.memory.heapTo)}</div><div class="s">${deltaMb(r.memory.heapFrom, r.memory.heapTo)}</div></div>
+        ${r.memory.rssTo != null ? `<div class="stat"><div class="k">App memory</div><div class="v">${fmtMb(r.memory.rssTo)}</div><div class="s">${deltaMb(r.memory.rssFrom, r.memory.rssTo)}</div></div>` : ''}
+        ${r.memory.threadsTo != null ? `<div class="stat"><div class="k">Threads</div><div class="v">${r.memory.threadsTo}</div><div class="s">${r.memory.threadsTo - r.memory.threadsFrom >= 0 ? '+' : ''}${r.memory.threadsTo - r.memory.threadsFrom} in range</div></div>` : ''}
+      </div>`,
+    );
+    root.append(node);
+  }
+  const freezes = relatedSection('Freezes', r.stalls);
+  if (freezes) root.append(freezes);
+  const renders = rendersSection(r.renders, 'What React rendered', 'and why');
+  if (renders) root.append(renders);
+  if (r.threads.length) {
+    const node = section('Busiest threads', 'average over the range');
+    node.insertAdjacentHTML('beforeend', shareRows(r.threads.slice(0, 8).map(t => ({ label: shortThreadName(t.name), pct: t.pct, text: `${t.pct}%`, color: laneColor(t.name) }))));
+    root.append(node);
+  }
+  const requests = relatedSection('Requests', r.requests);
+  if (requests) root.append(requests);
+  const consoleEvents = relatedSection('Console errors & warnings', r.console);
+  if (consoleEvents) root.append(consoleEvents);
+  const logs = logsSection(r.from, r.to);
+  if (logs) root.append(logs);
+}
+
+const deltaMb = (a, b) => (a == null || b == null ? '' : `${b - a >= 0 ? '+' : '−'}${fmtMb(Math.abs(b - a))} in range`);
+
+// ---------------------------------------------------------------- views
+
+const VIEWS = ['timeline', 'threads', 'console', 'network', 'memory', 'react', 'runs'];
+const viewRenderers = {};
+let viewTimer = null;
+
+function setView(view) {
+  state.view = view;
+  for (const v of VIEWS) $(`#view-${v}`).hidden = v !== view;
+  $('#view-select').value = view;
+  clearInterval(viewTimer);
+  if (view === 'timeline') {
+    layoutAt = 0;
+    return;
+  }
+  viewRenderers[view]();
+  // Live views refresh while shown; runs only change when a run ends.
+  if (view !== 'runs') viewTimer = setInterval(() => viewRenderers[view](), view === 'react' ? 2000 : 1000);
+}
+$('#view-select').addEventListener('sl-change', e => setView(e.target.value));
+
+// Jumps the timeline to a moment (pausing it there), e.g. from a log line.
+function jumpTo(at) {
+  if (!state.paused) togglePause();
+  state.pausedAt = Math.min(Date.now(), at + (state.windowSec * 1000) / 2);
+  setView('timeline');
+}
+
+const sparkline = (values, color, width = 140, height = 24) => {
+  if (values.length < 2) return '';
+  const step = width / (values.length - 1);
+  const points = values.map((v, i) => `${(i * step).toFixed(1)},${(height - 1 - v * (height - 3)).toFixed(1)}`).join(' ');
+  return `<svg class="spark" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"><polyline points="0,${height} ${points} ${width},${height}" fill="${color}" fill-opacity="0.18" stroke="none"/><polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg>`;
+};
+
+const emptyView = (title, text) => `<div class="view-empty"><strong>${esc(title)}</strong>${esc(text)}</div>`;
+
+// Threads: every thread with its CPU now, on average, at peak, and a sparkline.
+viewRenderers.threads = () => {
+  const now = Date.now();
+  const from = now - state.windowSec * 1000;
+  const BUCKETS = 40;
+  const rows = [...state.lanes.values()].map(lane => {
+    const recent = lane.points.filter(([at]) => at >= from);
+    const buckets = Array.from({ length: BUCKETS }, (_, i) => {
+      const b0 = from + (i * (now - from)) / BUCKETS;
+      const b1 = from + ((i + 1) * (now - from)) / BUCKETS;
+      const inside = recent.filter(([at]) => at > b0 && at <= b1);
+      return inside.length ? inside.reduce((sum, p) => sum + p[2], 0) / inside.length : 0;
+    });
+    return { lane, avg: busyBetween(lane, from, now), now: busyBetween(lane, now - 1000, now), peak: Math.max(0, ...recent.map(p => p[2])), buckets };
+  });
+  rows.sort((a, b) => (PINNED.includes(b.lane.name) - PINNED.includes(a.lane.name)) || b.avg - a.avg);
+  const active = rows.filter(r => r.peak > 0.004 || PINNED.includes(r.lane.name));
+  const idle = rows.length - active.length;
+  const view = $('#view-threads');
+  if (!rows.length) {
+    view.innerHTML = emptyView('No threads yet', state.status?.native ? 'Waiting for the first readings.' : 'Thread readings need the app running in the iOS simulator (or Android over adb).');
+    return;
+  }
+  const pct = v => `${Math.round(v * 100)}%`;
+  view.innerHTML = `<div class="view-body">
+    <h3>Threads <small>last ${state.windowSec}s · ${active.length} active, ${idle} idle</small></h3>
+    <div class="gtable threads-table">
+      <div class="grow ghead"><span>Thread</span><span class="num">Now</span><span class="num">Avg</span><span class="num">Peak</span><span>Last ${state.windowSec}s</span></div>
+      ${active
+        .map(
+          r => `<div class="grow" title="${esc(threadInfo(r.lane.name))}"><span class="name"><i style="background:${r.lane.color}"></i>${esc(shortThreadName(r.lane.name))}</span>
+          <span class="num">${pct(r.now)}</span><span class="num">${pct(r.avg)}</span><span class="num">${pct(r.peak)}</span>${sparkline(r.buckets, r.lane.color)}</div>`,
+        )
+        .join('')}
+    </div>
+    ${idle ? `<p class="view-caption" style="margin-top:10px">${idle} more thread${idle === 1 ? ' was' : 's were'} idle the whole time.</p>` : ''}
+  </div>`;
+};
+
+// Console: every line the app logged, not just warnings and errors.
+const consoleFilter = { level: 'all', search: '' };
+$('#console-level').addEventListener('sl-change', e => {
+  consoleFilter.level = e.target.value;
+  viewRenderers.console();
+});
+$('#console-search').addEventListener('sl-input', e => {
+  consoleFilter.search = e.target.value.toLowerCase();
+  viewRenderers.console();
+});
+viewRenderers.console = () => {
+  const list = $('#console-list');
+  const keepBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+  const lines = [
+    ...state.consoleEvents.map(c => ({ ...c, kind: c.level === 'error' ? 'error' : 'warn' })),
+    ...state.logs.map(l => ({ ...l, kind: l.level === 'debug' ? 'debug' : l.level === 'info' ? 'info' : 'log' })),
+  ]
+    .filter(l => consoleFilter.level === 'all' || (consoleFilter.level === 'log' ? ['log', 'info', 'debug'].includes(l.kind) : l.kind === consoleFilter.level))
+    .filter(l => !consoleFilter.search || l.text.toLowerCase().includes(consoleFilter.search))
+    .sort((a, b) => a.at - b.at)
+    .slice(-400);
+  if (!lines.length) {
+    list.innerHTML = emptyView('Nothing logged yet', consoleFilter.search || consoleFilter.level !== 'all' ? 'Nothing matches this filter.' : 'Console output from the app shows up here as it happens.');
+    return;
+  }
+  list.innerHTML = `<div class="gtable console-table">${lines
+    .map(
+      l => `<div class="grow clickable" data-id="${l.id}" data-at="${l.at}" data-finding="${l.type === 'console' ? 1 : ''}" title="${l.type === 'console' ? 'Open this finding' : 'Show this moment on the timeline'}">
+        <span class="time">${clock(l.at)}</span><span class="lvl ${l.kind}">${l.kind === 'warn' ? 'warning' : l.kind}</span>
+        <span class="text clip">${esc(l.text.slice(0, 1200))}</span>${l.count > 1 ? `<span class="count">×${l.count}</span>` : '<span></span>'}</div>`,
+    )
+    .join('')}</div>`;
+  if (keepBottom) list.scrollTop = list.scrollHeight;
+};
+$('#console-list').addEventListener('click', e => {
+  const row = e.target.closest('.grow[data-at]');
+  if (!row) return;
+  if (row.dataset.finding) select(Number(row.dataset.id));
+  else jumpTo(Number(row.dataset.at));
+});
+
+// Network: a waterfall of recent requests.
+viewRenderers.network = () => {
+  const view = $('#view-network');
+  const requests = state.requests.slice(-120);
+  if (!requests.length) {
+    view.innerHTML = emptyView('No requests yet', 'XHR and axios requests appear here. Expo’s native fetch isn’t reported by the app.');
+    return;
+  }
+  const start = Math.min(...requests.map(r => r.at));
+  const end = Math.max(...requests.map(r => r.at + r.ms));
+  const span = Math.max(1, end - start);
+  const slowMs = state.status?.settings?.slowRequestMs ?? 1000;
+  const failed = requests.filter(r => r.failed).length;
+  const slow = requests.filter(r => !r.failed && r.ms >= slowMs).length;
+  view.innerHTML = `<div class="view-body">
+    <h3>Requests <small>${requests.length} recent · ${slow} slow · ${failed} failed</small></h3>
+    <div class="gtable net-table">
+      <div class="grow ghead"><span>Request</span><span class="num">Status</span><span class="num">Time</span><span>${clock(start)} – ${clock(end)}</span></div>
+      ${[...requests]
+        .reverse()
+        .map(r => {
+          const left = ((r.at - start) / span) * 100;
+          const width = (r.ms / span) * 100;
+          const kind = r.failed ? 'failed' : r.ms >= slowMs ? 'slow' : '';
+          return `<div class="grow${r.issue ? ' clickable' : ''}" data-id="${r.issue ? r.id : ''}" title="${esc(r.method)} ${esc(r.url)}"><span class="mono">${esc(r.method)} ${esc(shortUrl(r.url))}</span>
+            <span class="num">${r.failed ? esc(r.status ?? 'failed') : esc(r.status ?? '—')}</span><span class="num">${r.ms >= 1000 ? `${(r.ms / 1000).toFixed(1)}s` : `${r.ms}ms`}</span>
+            <span class="wf"><b class="${kind}" style="left:${left.toFixed(2)}%;width:${Math.max(0.4, width).toFixed(2)}%"></b></span></div>`;
+        })
+        .join('')}
+    </div></div>`;
+};
+$('#view-network').addEventListener('click', e => {
+  const id = Number(e.target.closest('.grow[data-id]')?.dataset.id);
+  if (id) select(id);
+});
+
+// Memory: the whole session's JS heap, app memory and threads, with markers.
+const heapState = { snapshots: [], diff: null, busy: false, before: null, after: null };
+viewRenderers.memory = () => {
+  const view = $('#view-memory');
+  const vitals = state.vitals.filter(v => v.heapUsed > 0 || v.rss > 0);
+  if (vitals.length < 2) {
+    view.innerHTML = emptyView('Collecting memory readings', 'Readings arrive every 2 seconds.');
+    return;
+  }
+  if (view.contains(document.activeElement) && document.activeElement.closest('sl-select, sl-input')) return;
+  const W = 640;
+  const H = 220;
+  const t0 = vitals[0].at;
+  const t1 = vitals.at(-1).at;
+  const x = t => ((t - t0) / Math.max(1, t1 - t0)) * W;
+  const maxMem = Math.max(...vitals.map(v => Math.max(v.heapUsed ?? 0, v.rss ?? 0))) * 1.08;
+  const y = b => H - (b / maxMem) * H;
+  const threadVals = vitals.map(v => v.threads).filter(v => v != null);
+  const maxThreads = Math.max(1, ...threadVals) * 1.15;
+  const line = (key, color, scale) => {
+    const pts = vitals.filter(v => v[key] != null).map(v => `${x(v.at).toFixed(1)},${scale(v[key]).toFixed(1)}`);
+    return pts.length > 1 ? `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>` : '';
+  };
+  const marks = [
+    ...state.startups.map(st => ({ at: st.at, color: COLORS.ui, label: st.kind === 'reload' ? 'reload' : 'launch' })),
+    ...state.screens.map(sc => ({ at: sc.at, color: INK.muted, label: sc.name })),
+    ...state.alerts.map(a => ({ at: a.at, color: COLORS.severe, label: 'leak' })),
+  ].filter(m => m.at >= t0 && m.at <= t1);
+  const gridLines = [0.25, 0.5, 0.75, 1].map(f => `<line class="grid" x1="0" x2="${W}" y1="${(H - f * H).toFixed(1)}" y2="${(H - f * H).toFixed(1)}"/><text x="${W + 6}" y="${(H - f * H + 3).toFixed(1)}">${fmtMb(maxMem * f)}</text>`).join('');
+  const last = vitals.at(-1);
+  const minmax = key => {
+    const vals = vitals.map(v => v[key]).filter(v => v != null);
+    return vals.length ? [Math.min(...vals), Math.max(...vals)] : null;
+  };
+  const stat = (k, v, range) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${range}</div></div>`;
+  const heapRange = minmax('heapUsed');
+  const rssRange = minmax('rss');
+  const threadRange = minmax('threads');
+  view.innerHTML = `<div class="view-body">
+    <h3>Memory <small>${clock(t0)} – ${clock(t1)}</small></h3>
+    <div class="chart-card">
+      <svg class="chart" viewBox="0 0 ${W + 44} ${H + 18}">
+        ${gridLines}
+        ${markLines(marks, x, H)}
+        ${line('rss', COLORS.ui, y)}
+        ${line('heapUsed', COLORS.js, y)}
+        ${line('threads', INK.muted, v => H - (v / maxThreads) * H)}
+        <text x="0" y="${H + 14}">${clock(t0)}</text><text x="${W}" y="${H + 14}" text-anchor="end">${clock(t1)}</text>
+      </svg>
+      <div class="legend-row"><span><i style="background:${COLORS.js}"></i>JS heap</span><span><i style="background:${COLORS.ui}"></i>App memory</span><span><i style="background:${INK.muted}"></i>Threads (own scale)</span><span>Dashed lines: launches and reloads, screens, leak alerts</span></div>
+    </div>
+    <div class="stat-row">
+      ${heapRange ? stat('JS heap', fmtMb(last.heapUsed), `${fmtMb(heapRange[0])} – ${fmtMb(heapRange[1])}`) : ''}
+      ${rssRange ? stat('App memory', fmtMb(last.rss), `${fmtMb(rssRange[0])} – ${fmtMb(rssRange[1])}`) : ''}
+      ${threadRange ? stat('Threads', last.threads ?? '—', `${threadRange[0]} – ${threadRange[1]}`) : ''}
+    </div>
+    <h3>Heap snapshots <small>what kinds of objects grew between two moments</small></h3>
+    <p class="view-caption">Take one, open and leave a screen a few times, take another, then compare. Each snapshot freezes the app for a few seconds.</p>
+    <div class="heap-tools">
+      <sl-button size="small" variant="primary" id="heap-take" ${heapState.busy ? 'loading' : ''}><sl-icon slot="prefix" name="camera"></sl-icon>Take snapshot</sl-button>
+      ${heapState.snapshots.length > 1 ? `<sl-select size="small" id="heap-before" value="${esc(heapState.before ?? heapState.snapshots.at(-2).label)}" hoist>${heapState.snapshots.map(h => `<sl-option value="${esc(h.label)}">${esc(h.label)}</sl-option>`).join('')}</sl-select>
+      <sl-icon name="arrow-right"></sl-icon>
+      <sl-select size="small" id="heap-after" value="${esc(heapState.after ?? heapState.snapshots.at(-1).label)}" hoist>${heapState.snapshots.map(h => `<sl-option value="${esc(h.label)}">${esc(h.label)}</sl-option>`).join('')}</sl-select>
+      <sl-button size="small" id="heap-compare">Compare</sl-button>` : ''}
+    </div>
+    ${heapState.snapshots.length ? `<p class="view-caption" style="margin-top:8px">${heapState.snapshots.map(h => `${esc(h.label)}: ${fmtMb(h.size)} at ${clock(h.at)}`).join(' · ')}</p>` : ''}
+    ${
+      heapState.diff
+        ? `<div class="gtable heap-table" style="margin-top:8px"><div class="grow ghead"><span>Grew the most (${heapState.diff.countDelta >= 0 ? '+' : ''}${heapState.diff.countDelta} objects, ${heapState.diff.sizeDelta >= 0 ? '+' : '−'}${fmtMb(Math.abs(heapState.diff.sizeDelta))})</span><span class="num">Objects</span><span class="num">Size</span></div>
+          ${heapState.diff.grew.slice(0, 15).map(g => `<div class="grow"><span class="mono">${esc(g.name)}</span><span class="num">+${g.count}</span><span class="num">+${Math.round(g.size / 1024)} KB</span></div>`).join('')}</div>`
+        : ''
+    }
+  </div>`;
+  $('#heap-take').addEventListener('click', async () => {
+    const label = prompt('Name this snapshot (e.g. "before"):', heapState.snapshots.length ? 'after' : 'before');
+    if (!label) return;
+    heapState.busy = true;
+    viewRenderers.memory();
+    const res = await post('/api/heap/snapshot', { label });
+    heapState.busy = false;
+    if (res.error) toast(`Snapshot failed: ${res.error}`, 'danger');
+    else heapState.snapshots = (await fetch('/api/heap').then(r => r.json())).snapshots;
+    viewRenderers.memory();
+  });
+  $('#heap-before')?.addEventListener('sl-change', e => (heapState.before = e.target.value));
+  $('#heap-after')?.addEventListener('sl-change', e => (heapState.after = e.target.value));
+  $('#heap-compare')?.addEventListener('click', async () => {
+    const res = await fetch(`/api/heap/diff?before=${encodeURIComponent($('#heap-before').value)}&after=${encodeURIComponent($('#heap-after').value)}`).then(r => r.json());
+    if (res.error) toast(res.error, 'danger');
+    else heapState.diff = res;
+    viewRenderers.memory();
+  });
+};
+
+// Dashed marker lines; a label is skipped when it would run into the previous one.
+function markLines(marks, x, H) {
+  let labelEnd = -Infinity;
+  return [...marks]
+    .sort((a, b) => a.at - b.at)
+    .map(m => {
+      const px = x(m.at);
+      const fits = px >= labelEnd + 4;
+      if (fits) labelEnd = px + 3 + m.label.length * 5.6;
+      return `<line x1="${px.toFixed(1)}" x2="${px.toFixed(1)}" y1="0" y2="${H}" stroke="${m.color}" stroke-dasharray="3 3" stroke-opacity="0.6"/>${fits ? `<text x="${(px + 3).toFixed(1)}" y="10">${esc(m.label)}</text>` : ''}`;
+    })
+    .join('');
+}
+
+// React: commits over time, where render time went, and avoidable re-renders.
+viewRenderers.react = async () => {
+  const view = $('#view-react');
+  const data = await fetch('/api/react?seconds=60').then(r => r.json()).catch(() => null);
+  if (state.view !== 'react' || !data) return;
+  if (data.probe !== 'on' && !data.commits.length) {
+    view.innerHTML = emptyView('React probe not running', data.probe === 'no-hook' ? 'The app has no React DevTools hook (only dev builds have it).' : 'It starts when Hitch attaches to a dev build through Metro.');
+    return;
+  }
+  const W = 640;
+  const H = 120;
+  const now = Date.now();
+  const t0 = now - 120000;
+  const commits = data.commits.filter(c => c.at >= t0);
+  const maxMs = Math.max(16, ...commits.map(c => c.ms));
+  const bars = commits
+    .map(c => {
+      const bx = ((c.at - t0) / 120000) * W;
+      const bh = Math.max(1.5, (c.ms / maxMs) * H);
+      const color = c.ms >= 50 ? COLORS.severe : c.ms >= 16 ? COLORS.stall : COLORS.ui;
+      return `<rect x="${bx.toFixed(1)}" y="${(H - bh).toFixed(1)}" width="3" height="${bh.toFixed(1)}" rx="1" fill="${color}"><title>${clock(c.at)} · ${c.ms}ms · ${c.rendered} renders · ${c.mounts} mounts</title></rect>`;
+    })
+    .join('');
+  const frameLine = H - (16 / maxMs) * H;
+  const body = el('div', 'view-body');
+  body.innerHTML = `<h3>React commits <small>last 2 minutes · ${commits.length} commits · ${Math.round(commits.reduce((s2, c) => s2 + c.ms, 0))}ms rendering</small></h3>
+    <div class="chart-card">
+      <svg class="chart" viewBox="0 0 ${W + 44} ${H + 18}">
+        <line class="grid" x1="0" x2="${W}" y1="${H}" y2="${H}"/>
+        ${maxMs > 16 ? `<line x1="0" x2="${W}" y1="${frameLine.toFixed(1)}" y2="${frameLine.toFixed(1)}" stroke="${COLORS.stall}" stroke-dasharray="3 3" stroke-opacity="0.6"/><text x="${W + 6}" y="${(frameLine + 3).toFixed(1)}">16ms</text>` : ''}
+        <text x="${W + 6}" y="8">${Math.round(maxMs)}ms</text>
+        ${bars}
+        <text x="0" y="${H + 14}">−2m</text><text x="${W}" y="${H + 14}" text-anchor="end">now</text>
+      </svg>
+      <div class="legend-row"><span>Each bar is one commit: how long React spent rendering it.</span><span><i style="background:${COLORS.stall}"></i>over a frame (16ms)</span><span><i style="background:${COLORS.severe}"></i>over 50ms</span></div>
+    </div>`;
+  const summary = rendersSection(data.summary, 'Where render time went', 'last 60 seconds');
+  if (summary) body.append(summary);
+  if (data.avoidable.length) {
+    const node = section('Avoidable re-renders', 'during freezes this session');
+    node.insertAdjacentHTML(
+      'beforeend',
+      `<div class="gtable"><div class="grow ghead" style="grid-template-columns:minmax(0,1fr) 120px"><span>Component and why</span><span class="num">Avoidable</span></div>${data.avoidable
+        .slice(0, 12)
+        .map(a => `<div class="grow" style="grid-template-columns:minmax(0,1fr) 120px"><span><span class="name">${esc(a.name)}</span><span style="color:var(--label-2);font-size:12px">${esc(a.reason)}</span></span><span class="num">${a.avoidable} of ${a.renders}</span></div>`)
+        .join('')}</div>`,
+    );
+    body.append(node);
+  }
+  const scrolled = view.querySelector('.view-body')?.scrollTop ?? 0;
+  view.replaceChildren(body);
+  body.scrollTop = scrolled;
+};
+
+// Runs: recorded runs and how each compares with the previous of its name.
+viewRenderers.runs = async () => {
+  const view = $('#view-runs');
+  const data = await fetch('/api/runs').then(r => r.json()).catch(() => null);
+  if (!data) return;
+  if (!data.runs.length) {
+    view.innerHTML = emptyView('No runs yet', 'Use Record in the toolbar around an interaction (open a screen, scroll). Runs with the same name are compared.');
+    return;
+  }
+  const previous = new Map();
+  const rows = data.runs.map(run => {
+    const before = previous.get(run.name);
+    previous.set(run.name, run);
+    return { run, before };
+  });
+  const delta = (a, b, unit = '') => {
+    if (a == null || a === b) return '';
+    const better = b < a;
+    const change = Math.abs(b - a) >= Math.max(1, Math.abs(a) * 0.1);
+    return change ? ` <span class="delta ${better ? 'better' : 'worse'}">${better ? '↓' : '↑'}${Math.abs(b - a)}${unit}</span>` : '';
+  };
+  view.innerHTML = `<div class="view-body">
+    <h3>Runs <small>${data.runs.length} saved${data.active ? ` · recording “${esc(data.active.name)}”` : ''}</small></h3>
+    <p class="view-caption">Arrows compare each run with the previous run of the same name; lower is better.</p>
+    <div class="gtable runs-table">
+      <div class="grow ghead"><span>Run</span><span class="num">JS blocked</span><span class="num">Freezes</span><span class="num">Choppy</span><span class="num">Errors</span></div>
+      ${rows
+        .reverse()
+        .map(({ run, before }) => {
+          const s2 = run.summary;
+          const b = before?.summary;
+          return `<div class="grow"><span><span class="name">${esc(run.name)}${s2.iterations ? ` <small style="color:var(--label-3)">median of ${s2.iterations}</small>` : ''}</span><span style="color:var(--label-2);font-size:11.5px">${new Date(run.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}${run.git?.branch ? ` · ${esc(run.git.branch)}@${esc(run.git.commit)}` : ''}</span></span>
+            <span class="num">${s2.blockedMs}ms${delta(b?.blockedMs, s2.blockedMs, 'ms')}</span><span class="num">${s2.stalls}${delta(b?.stalls, s2.stalls)}</span><span class="num">${s2.jankSeconds}s${delta(b?.jankSeconds, s2.jankSeconds, 's')}</span><span class="num">${s2.errors}${delta(b?.errors, s2.errors)}</span></div>`;
+        })
+        .join('')}
+    </div></div>`;
+};
 
 setInterval(trimLanes, 5000);
 connect();

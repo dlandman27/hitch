@@ -623,6 +623,8 @@ export function startEngine(initial) {
   };
   events.heapLabels = () => [...heaps.values()].map(h => ({ label: h.label, at: h.at, screen: h.screen, size: h.size, count: h.count }));
   events.renders = (from, to) => summarizeRenders(probe.commits, from, to);
+  // Recent commits for the React view: when, how long, how much rendered.
+  events.reactCommits = () => probe.commits.map(c => ({ at: c.at, ms: c.ms, rendered: c.rendered, mounts: c.mounts }));
   events.setSettings = patch => {
     for (const key of Object.keys(settings)) {
       if (Number.isFinite(patch[key]) && patch[key] > 0) settings[key] = patch[key];

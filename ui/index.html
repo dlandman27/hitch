@@ -100,37 +100,67 @@
       <sl-icon slot="divider" name="grip-vertical"></sl-icon>
 
       <section slot="start" class="threads" aria-label="Threads">
-        <div class="vitals-bar" id="vitals" aria-label="App vitals"></div>
-        <sl-alert id="phone-note" class="banner" variant="primary" hidden>
-          <sl-icon slot="icon" name="phone"></sl-icon><span></span>
-        </sl-alert>
-        <sl-alert id="stale-alert" class="banner" variant="warning" hidden>
-          <sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon>
-          <div class="banner-row">
-            <span><strong>The app is running older code than Metro has.</strong> Lines may point to the wrong place until it reloads.</span>
-            <sl-button id="reload-btn" size="small"><sl-icon slot="prefix" name="arrow-clockwise"></sl-icon>Reload app</sl-button>
-          </div>
-        </sl-alert>
-        <sl-alert id="map-alert" class="banner" variant="warning" hidden>
-          <sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon>
-          <strong>Hitch's source map doesn't match the bundle the app is running.</strong> Metro may still be rebuilding after a pull or branch switch; Hitch keeps checking. Until it matches, your own files and lines in findings may be wrong (library frames are fine).
-        </sl-alert>
-        <div class="lanes-wrap" id="lanes-wrap">
-          <canvas id="lanes"></canvas>
-          <div class="hover-tip" id="hover-tip" hidden></div>
-          <sl-alert id="lanes-empty" variant="primary" hidden>
-            <sl-icon slot="icon" name="info-circle-fill"></sl-icon>Thread lanes need the app running in the iOS simulator.
+        <div class="view-bar">
+          <sl-radio-group id="view-select" class="tb-segmented view-switch" size="small" value="timeline" label="View">
+            <sl-radio-button value="timeline">Timeline</sl-radio-button>
+            <sl-radio-button value="threads">Threads</sl-radio-button>
+            <sl-radio-button value="console">Console</sl-radio-button>
+            <sl-radio-button value="network">Network</sl-radio-button>
+            <sl-radio-button value="memory">Memory</sl-radio-button>
+            <sl-radio-button value="react">React</sl-radio-button>
+            <sl-radio-button value="runs">Runs</sl-radio-button>
+          </sl-radio-group>
+          <div class="vitals-bar" id="vitals" aria-label="App vitals"></div>
+        </div>
+        <div class="view view-timeline" id="view-timeline">
+          <sl-alert id="phone-note" class="banner" variant="primary" hidden>
+            <sl-icon slot="icon" name="phone"></sl-icon><span></span>
           </sl-alert>
+          <sl-alert id="stale-alert" class="banner" variant="warning" hidden>
+            <sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon>
+            <div class="banner-row">
+              <span><strong>The app is running older code than Metro has.</strong> Lines may point to the wrong place until it reloads.</span>
+              <sl-button id="reload-btn" size="small"><sl-icon slot="prefix" name="arrow-clockwise"></sl-icon>Reload app</sl-button>
+            </div>
+          </sl-alert>
+          <sl-alert id="map-alert" class="banner" variant="warning" hidden>
+            <sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon>
+            <strong>Hitch's source map doesn't match the bundle the app is running.</strong> Metro may still be rebuilding after a pull or branch switch; Hitch keeps checking. Until it matches, your own files and lines in findings may be wrong (library frames are fine).
+          </sl-alert>
+          <div class="lanes-wrap" id="lanes-wrap">
+            <canvas id="lanes"></canvas>
+            <div class="hover-tip" id="hover-tip" hidden></div>
+            <sl-alert id="lanes-empty" variant="primary" hidden>
+              <sl-icon slot="icon" name="info-circle-fill"></sl-icon>Thread lanes need the app running in the iOS simulator.
+            </sl-alert>
+          </div>
+          <div class="section-head threads-foot">
+            <h2>Threads</h2>
+            <sl-badge variant="neutral" pill id="thread-count">0</sl-badge>
+            <sl-tooltip hoist content="Every thread in the app, live. Each bar is how busy that thread was over 50ms, measured from your Mac with nothing running inside the app. Hover a name to see what that thread does. Click a marked freeze or shaded area to see what was running.">
+              <sl-icon name="info-circle" class="info-i"></sl-icon>
+            </sl-tooltip>
+            <div class="spacer"></div>
+            <div class="legend" id="legend"></div>
+          </div>
         </div>
-        <div class="section-head threads-foot">
-          <h2>Threads</h2>
-          <sl-badge variant="neutral" pill id="thread-count">0</sl-badge>
-          <sl-tooltip hoist content="Every thread in the app, live. Each bar is how busy that thread was over 50ms, measured from your Mac with nothing running inside the app. Hover a name to see what that thread does. Click a marked freeze or shaded area to see what was running.">
-            <sl-icon name="info-circle" class="info-i"></sl-icon>
-          </sl-tooltip>
-          <div class="spacer"></div>
-          <div class="legend" id="legend"></div>
+        <div class="view" id="view-threads" hidden></div>
+        <div class="view" id="view-console" hidden>
+          <div class="view-tools">
+            <sl-radio-group id="console-level" class="tb-segmented" size="small" value="all" label="Level">
+              <sl-radio-button value="all">All</sl-radio-button>
+              <sl-radio-button value="error">Errors</sl-radio-button>
+              <sl-radio-button value="warn">Warnings</sl-radio-button>
+              <sl-radio-button value="log">Logs</sl-radio-button>
+            </sl-radio-group>
+            <sl-input id="console-search" class="view-search" size="small" type="search" placeholder="Filter" clearable><sl-icon slot="prefix" name="search"></sl-icon></sl-input>
+          </div>
+          <div class="view-body" id="console-list"></div>
         </div>
+        <div class="view" id="view-network" hidden></div>
+        <div class="view" id="view-memory" hidden></div>
+        <div class="view" id="view-react" hidden></div>
+        <div class="view" id="view-runs" hidden></div>
       </section>
 
       <aside slot="end" class="inspector" aria-label="Captured events">

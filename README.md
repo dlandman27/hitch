@@ -87,6 +87,20 @@ If you run several Metro servers (different projects or ports), Hitch finds all 
 
 Hover any **ⓘ** for a plain-language explanation of what that part shows and how it's measured.
 
+### Views
+
+The left panel has a view switcher next to the vitals:
+
+| View | What it shows |
+|---|---|
+| **Timeline** | Thread lanes, network, console and memory over the last 15s–3m, with the screen the app was on along the top. **Drag across the lanes** to select a range: the lanes pause and the right side shows everything in that slice (freezes, what React rendered and why, busiest threads, requests, console, logs, memory), ready to send to Claude Code like any event. |
+| **Threads** | Every thread with its CPU now, on average and at peak, and a sparkline. |
+| **Console** | Every line the app logged, filterable by level and text. Click a warning or error to open it; click any other line to jump the timeline to that moment. |
+| **Network** | A waterfall of recent requests with status and time; slow and failed ones stand out. |
+| **Memory** | The whole session's JS heap, app memory and thread count, with launches, reloads, screens and leak alerts marked; plus heap snapshots and a comparison of what grew between two of them. |
+| **React** | Each commit's render time over the last two minutes, where render time went, and the session's avoidable re-renders. |
+| **Runs** | Recorded runs, each compared with the previous run of the same name. |
+
 ### Top bar
 
 | | |

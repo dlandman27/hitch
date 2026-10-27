@@ -73,6 +73,7 @@ The tools are:
 | `react-probe.mjs` | `PROBE_SOURCE` (runs inside the app on the DevTools hook: renders, reasons, frames, screen) plus host-side `summarizeRenders`, `jankPeriods`, `createScreenTracker` |
 | `profile.mjs`, `heap.mjs` | Hermes profiles → stacks and hot functions; heap snapshot summaries and diffs |
 | `runs.mjs` | Runs, scenarios, medians and comparisons, saved under `~/.hitch/runs` and `~/.hitch/scenarios` |
+| `range.mjs` | A slice of the timeline (`summarizeRange`) and its AI brief (`rangePrompt`), served at `/api/range` |
 | `android.mjs` | Android thread CPU and memory via adb (unit-tested; not yet run against a device) |
 | `mac-app.mjs`, `mac/HitchApp.swift` | Native Hitch.app (WKWebView window); compiled at `--install-app` |
 | `ui/` | `index.html`, `app.js` (one file: state, SSE, canvas lanes, detail panes), `app.css`, `brand/` |
@@ -123,6 +124,7 @@ The tools are:
 - **The probe runs inside the user's app.** Keep `PROBE_SOURCE` plain ES2015, never throw into React, keep per-commit work bounded (`MAX_PER_COMMIT`, `MAX_DIFFED`), and keep its cost visible (`health.probeCost`). Its frames carry `hitch-probe.js` and are labelled, never blamed on the app.
 - **Source maps are placed per module** (`calibrateOffset` / `offsetAt` in `symbolicate.mjs`): a long-running Metro and Hitch's fresh private Metro can order modules differently. Agreement below 95% marks the map as mismatched.
 - **Dev builds vary run to run** (2× is normal). Compare medians of several plays, not single runs.
+- **UI views** live in `ui/app.js` under `viewRenderers`; each re-renders on a 1–2s timer only while shown. The timeline canvas is `draw()`; WebKit pauses `requestAnimationFrame` when the page is hidden, so screenshot it in Chrome or on a visible window.
 - **`~/.hitch/` layout:** `<ISO time>/report.md` + `session.json` per session that found something, `handoffs/` (briefs sent to Claude), `runs/` and `scenarios/`, `app.log` (Hitch.app output), `window-profile/` (Chrome `--app` window profile).
 - **The terminal log is chronological per source, not globally.** Console lines carry the app's timestamp, so they can print slightly out of order with stall lines.
 
