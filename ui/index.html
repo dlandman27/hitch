@@ -51,13 +51,6 @@
         </sl-tooltip>
       </div>
 
-      <sl-radio-group id="window-select" class="tb-segmented" size="small" value="30" label="Time window">
-        <sl-radio-button value="15">15s</sl-radio-button>
-        <sl-radio-button value="30">30s</sl-radio-button>
-        <sl-radio-button value="60">1m</sl-radio-button>
-        <sl-radio-button value="180">3m</sl-radio-button>
-      </sl-radio-group>
-
       <div class="tb-group" role="group" aria-label="Runs">
         <sl-tooltip content="Record a named run of an interaction. When you stop, Hitch compares it with the last run of the same name." id="run-tip">
           <button class="tb-btn" id="run-btn" type="button" aria-label="Record run"><sl-icon name="record-circle"></sl-icon><span class="tb-btn-label">Record</span></button>
@@ -75,14 +68,6 @@
       <sl-dropdown id="more-menu" placement="bottom-end" distance="6" hoist>
         <button slot="trigger" class="tb-btn tb-more" type="button" aria-label="More actions"><sl-icon name="three-dots"></sl-icon></button>
         <sl-menu>
-          <div id="window-menu-items">
-            <sl-menu-label>Time window</sl-menu-label>
-            <sl-menu-item type="checkbox" data-window="15">15 seconds</sl-menu-item>
-            <sl-menu-item type="checkbox" data-window="30" checked>30 seconds</sl-menu-item>
-            <sl-menu-item type="checkbox" data-window="60">1 minute</sl-menu-item>
-            <sl-menu-item type="checkbox" data-window="180">3 minutes</sl-menu-item>
-            <sl-divider></sl-divider>
-          </div>
           <sl-menu-item id="menu-pause">Pause lanes<span slot="suffix" class="menu-key">P</span></sl-menu-item>
           <sl-menu-item id="menu-sample">Sample native threads</sl-menu-item>
           <sl-menu-item id="menu-run">Record run…</sl-menu-item>
@@ -122,6 +107,15 @@
           <div class="vitals-bar" id="vitals" aria-label="App vitals"></div>
         </div>
         <div class="view view-timeline" id="view-timeline">
+          <div class="view-head">
+            <h3>Timeline <small>freezes, screens and every thread, live</small></h3>
+            <sl-radio-group id="window-select" class="tb-segmented" size="small" value="30" label="Time window">
+              <sl-radio-button value="15">15s</sl-radio-button>
+              <sl-radio-button value="30">30s</sl-radio-button>
+              <sl-radio-button value="60">1m</sl-radio-button>
+              <sl-radio-button value="180">3m</sl-radio-button>
+            </sl-radio-group>
+          </div>
           <sl-alert id="phone-note" class="banner" variant="primary" hidden>
             <sl-icon slot="icon" name="phone"></sl-icon><span></span>
           </sl-alert>

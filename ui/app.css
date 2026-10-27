@@ -598,25 +598,11 @@ sl-dropdown[open] .tb-capsule {
   color: var(--label-3);
 }
 
-/* The toolbar collapses like Xcode's: labels, then the time window (it moves
-   into •••), then the findings count, then the device name. */
-#window-menu-items {
-  display: none;
-}
-
+/* The toolbar collapses like Xcode's: labels, then the findings count, then
+   the device name. */
 @media (max-width: 1100px) {
   .tb-btn-label {
     display: none;
-  }
-}
-
-@media (max-width: 1080px) {
-  .tb-segmented {
-    display: none;
-  }
-
-  #window-menu-items {
-    display: contents;
   }
 }
 
@@ -1983,6 +1969,38 @@ sl-tooltip::part(body) {
 
 .view-timeline .lanes-wrap {
   flex: 1;
+}
+
+/* The Timeline's title row, like the other pages' titles, with the window on the right. */
+.view-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 8px;
+}
+
+.view-head h3 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.view-head h3 small {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--label-2);
+}
+
+@container threads (max-width: 520px) {
+  .view-head h3 small {
+    display: none;
+  }
 }
 
 .view-tools {

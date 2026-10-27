@@ -1870,15 +1870,13 @@ $('#sample-btn').addEventListener('click', async () => {
   toast('Sampling every thread for 1s…');
 });
 
-// The time window lives in the toolbar, or in ••• when the window is narrow.
+// The time window sits in the Timeline's title row; only that page draws over time.
 function setWindow(seconds) {
   state.windowSec = seconds;
   layoutAt = 0;
   $('#window-select').value = String(seconds);
-  for (const item of document.querySelectorAll('[data-window]')) item.checked = Number(item.dataset.window) === seconds;
 }
 $('#window-select').addEventListener('sl-change', e => setWindow(Number(e.target.value)));
-for (const item of document.querySelectorAll('[data-window]')) item.addEventListener('click', () => setWindow(Number(item.dataset.window)));
 
 $('#filter').addEventListener('sl-change', e => {
   state.filter = e.target.value;
