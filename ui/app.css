@@ -78,7 +78,10 @@
   --sl-color-neutral-1000: #ffffff;
   --sl-panel-background-color: var(--cell);
   --sl-panel-border-color: var(--separator);
-  --sl-input-background-color: var(--fill);
+  --sl-input-background-color: #2c2c2e;
+  --sl-input-background-color-hover: #313133;
+  --sl-input-background-color-focus: #2c2c2e;
+  --sl-input-placeholder-color: rgb(235 235 245 / 0.3);
   --sl-input-border-color: transparent;
   --sl-input-border-radius-small: 7px;
   --sl-input-border-radius-medium: 8px;
@@ -606,6 +609,7 @@ sl-radio-group::part(form-control-label) {
 }
 
 .inspector .section-head {
+  padding-inline: 14px;
   border-bottom: 0;
 }
 
@@ -691,7 +695,7 @@ sl-radio-group::part(form-control-label) {
 .events {
   overflow-y: auto;
   min-height: 0;
-  padding: 4px 14px 16px;
+  padding: 0 6px 16px 14px;
 }
 
 .event {
@@ -1235,8 +1239,48 @@ sl-card::part(header) {
   grid-template-rows: auto auto 1fr;
 }
 
+/* A Mac search field: one solid fill, magnifier and placeholder in
+   secondary gray, aligned with the list's edges. */
 .search-bar {
-  padding: var(--sl-spacing-x-small) var(--sl-spacing-small) 0;
+  padding: 2px 14px 10px;
+}
+
+#search::part(base) {
+  height: 32px;
+  border: 0;
+  border-radius: 9px;
+}
+
+#search::part(input) {
+  background: none;
+  font-size: 13px;
+}
+
+#search::part(prefix) {
+  padding-left: 10px;
+  color: var(--label-2);
+  font-size: 14px;
+}
+
+/* Slim overlay-style scrollbars, so lists keep the same side margins. */
+.events::-webkit-scrollbar,
+.detail-scroll::-webkit-scrollbar,
+.lanes-wrap::-webkit-scrollbar {
+  width: 8px;
+}
+
+.events::-webkit-scrollbar-thumb,
+.detail-scroll::-webkit-scrollbar-thumb,
+.lanes-wrap::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.18) padding-box;
+}
+
+.events::-webkit-scrollbar-track,
+.detail-scroll::-webkit-scrollbar-track,
+.lanes-wrap::-webkit-scrollbar-track {
+  background: none;
 }
 
 .d-section h3 sl-copy-button {
