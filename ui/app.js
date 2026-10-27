@@ -2051,9 +2051,18 @@ function setView(view) {
     layoutAt = 0;
     return;
   }
-  viewRenderers[view]();
+  refreshView(view);
   // Live views refresh while shown; runs only change when a run ends.
-  if (view !== 'runs') viewTimer = setInterval(() => viewRenderers[view](), view === 'react' ? 2000 : 1000);
+  if (view !== 'runs') viewTimer = setInterval(() => refreshView(view), view === 'react' ? 2000 : 1000);
+}
+
+// Re-renders a view without losing where it was scrolled to.
+async function refreshView(view) {
+  const node = $(`#view-${view}`);
+  const scrolled = node.querySelector('.view-body')?.scrollTop ?? 0;
+  await viewRenderers[view]();
+  const body = node.querySelector('.view-body');
+  if (body && body.scrollTop !== scrolled) body.scrollTop = scrolled;
 }
 $('#view-select').addEventListener('sl-change', e => setView(e.target.value));
 $('#view-select-compact').addEventListener('sl-change', e => setView(e.target.value));
@@ -2155,9 +2164,14 @@ $('#console-list').addEventListener('click', e => {
 });
 
 // Network: a waterfall of recent requests.
+let networkKey = '';
 viewRenderers.network = () => {
   const view = $('#view-network');
   const requests = state.requests.slice(-120);
+  // Nothing new since the last refresh: leave the list (and its scroll) alone.
+  const key = `${requests.length}:${requests.at(-1)?.id ?? ''}:${requests.at(-1)?.bodySize ?? ''}`;
+  if (key === networkKey && view.querySelector('.view-body')) return;
+  networkKey = key;
   if (!requests.length) {
     view.innerHTML = emptyView('No requests yet', 'XHR and axios requests appear here. Expo’s native fetch isn’t reported by the app.');
     return;
