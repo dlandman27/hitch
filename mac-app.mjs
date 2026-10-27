@@ -81,6 +81,8 @@ export function installMacApp(dir = path.dirname(APP_PATH)) {
   fs.chmodSync(path.join(app, 'Contents', 'MacOS', 'Hitch'), 0o755);
   fs.rmSync(build, { recursive: true, force: true });
   fs.copyFileSync(path.join(HERE, 'ui', 'brand', 'hitch.icns'), path.join(app, 'Contents', 'Resources', 'hitch.icns'));
+  // The logo for the page shown while Hitch starts.
+  fs.copyFileSync(path.join(HERE, 'ui', 'brand', 'hitch-mark.svg'), path.join(app, 'Contents', 'Resources', 'hitch-mark.svg'));
   const start = path.join(app, 'Contents', 'Resources', 'start-hitch');
   fs.writeFileSync(start, startScript({ node: process.execPath, entry: path.join(HERE, 'index.mjs'), log: path.join(os.homedir(), '.hitch', 'app.log') }));
   fs.chmodSync(start, 0o755);

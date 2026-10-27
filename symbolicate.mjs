@@ -88,6 +88,7 @@ export function calibrateOffset(bundleText, lines, sources) {
     return mapped > 0 && own / mapped >= 0.9;
   };
   let checked = 0;
+  let placed = 0;
   const footerLines = [];
   const offsets = [];
   const bundleLines = bundleText.split('\n');
@@ -97,12 +98,13 @@ export function calibrateOffset(bundleText, lines, sources) {
     if (!match) continue;
     const idx = sourceIndex.get(match[1]);
     if (idx !== undefined && lastLine.has(idx)) {
+      // The footer names the module, so its offset holds even when some of its
+      // lines don't line up; the fit check only measures overall agreement.
       checked += 1;
       const offset = l - lastLine.get(idx);
-      if (fits(moduleStart, l, offset, idx)) {
-        footerLines.push(l);
-        offsets.push(offset);
-      }
+      footerLines.push(l);
+      offsets.push(offset);
+      if (fits(moduleStart, l, offset, idx)) placed += 1;
     }
     moduleStart = l + 1;
   }
@@ -112,7 +114,7 @@ export function calibrateOffset(bundleText, lines, sources) {
     offset: [...counts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 0,
     footerLines,
     offsets,
-    agreement: checked ? footerLines.length / checked : null,
+    agreement: checked ? placed / checked : null,
   };
 }
 

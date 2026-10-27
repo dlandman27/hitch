@@ -1679,6 +1679,13 @@ $('#search').addEventListener('sl-input', e => {
 
 $('#settings-btn').addEventListener('click', () => $('#settings').show());
 $('#menu-pause').addEventListener('click', togglePause);
+$('#tb-clear').addEventListener('click', () => $('#reset-btn').click());
+const reloadApp = async () => {
+  const res = await post('/api/reload');
+  toast(res.error ? `Couldn't reload: ${res.error}` : 'Reloading the app…', res.error ? 'danger' : 'primary');
+};
+$('#tb-reload').addEventListener('click', reloadApp);
+$('#menu-reload').addEventListener('click', reloadApp);
 $('#menu-sample').addEventListener('click', () => $('#sample-btn').click());
 $('#menu-run').addEventListener('click', () => $('#run-btn').click());
 $('#menu-report').addEventListener('click', async () => {

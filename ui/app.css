@@ -489,6 +489,7 @@ sl-dropdown[open] .tb-capsule {
 
 .topbar.replay .tb-group,
 .topbar.replay #reset-btn,
+.topbar.replay #menu-reload,
 .topbar.replay #menu-pause,
 .topbar.replay #menu-sample,
 .topbar.replay #menu-run {

@@ -58,13 +58,16 @@ test('map calibration reports how much of the bundle agrees with the map', () =>
   // A module whose code differs (an extra line inside it) can't be placed with confidence.
   const edited = ['banner', 'code a', '},0,[],"a.js");', 'code b', 'extra', '},1,[],"b.js");', 'code c', '},2,[],"c.js");'].join('\n');
   const partial = calibrateOffset(edited, lines, sources);
-  assert.equal(partial.footerLines.length, 2);
+  assert.ok(partial.agreement < 1);
+  // Its own footer still places it, and the modules after it.
+  assert.equal(offsetAt(partial, 4), 2);
   assert.equal(offsetAt(partial, 7), 2);
   // The same modules in another order (a fresh Metro vs a long-running one):
   // each module gets its own offset. (Module c shares its range with the banner.)
   const reordered = ['banner', 'code c', '},2,[],"c.js");', 'code a', '},0,[],"a.js");', 'code b', '},1,[],"b.js");'].join('\n');
   const moved = calibrateOffset(reordered, lines, sources);
-  assert.deepEqual(moved.footerLines, [4, 6]);
+  assert.deepEqual(moved.footerLines, [2, 4, 6]);
+  assert.equal(offsetAt(moved, 1), -3);
   assert.equal(offsetAt(moved, 3), 3);
   assert.equal(offsetAt(moved, 5), 3);
   const reorderedNoBanner = ['code c', '},2,[],"c.js");', 'code a', '},0,[],"a.js");', 'code b', '},1,[],"b.js");'].join('\n');

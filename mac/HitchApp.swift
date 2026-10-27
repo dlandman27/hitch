@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKUI
         webView = WKWebView(frame: .zero, configuration: config)
         webView.uiDelegate = self
         webView.navigationDelegate = self
-        webView.loadHTMLString(Self.startingPage, baseURL: nil)
+        webView.loadHTMLString(Self.statusPage("Starting Hitch…", spinning: true), baseURL: nil)
 
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Hitch"
@@ -144,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKUI
     }
 
     func showError(_ text: String) {
-        webView.loadHTMLString(Self.startingPage.replacingOccurrences(of: "Starting Hitch…", with: text), baseURL: nil)
+        webView.loadHTMLString(Self.statusPage(text, spinning: false), baseURL: nil)
     }
 
     // The page reloading after Hitch restarts, or a dropped connection: try again.
@@ -209,9 +209,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKUI
         NSApp.mainMenu = main
     }
 
-    static let startingPage = """
-    <html><body style="margin:0;height:100vh;display:grid;place-items:center;background:#18181b;color:#a1a1aa;font:15px -apple-system,sans-serif">Starting Hitch…</body></html>
-    """
+    // Shown before Hitch's server answers: the logo, a line of status, and a
+    // spinner while starting. The logo ships inside the app bundle.
+    static func statusPage(_ text: String, spinning: Bool) -> String {
+        let logo = Bundle.main.url(forResource: "hitch-mark", withExtension: "svg").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        let escaped = text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+        return """
+        <html><head><meta charset="utf-8"><style>
+          html, body { margin: 0; height: 100vh; background: #1e1e1e; color: rgba(235,235,245,.6); font: 13px -apple-system, sans-serif; -webkit-user-select: none; }
+          body { display: grid; place-content: center; justify-items: center; gap: 14px; }
+          .logo svg { width: 72px; height: 72px; }
+          .title { color: #fff; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+          .spinner { width: 16px; height: 16px; border: 2px solid rgba(235,235,245,.18); border-top-color: #2463eb; border-radius: 50%; animation: spin .8s linear infinite; }
+          @keyframes spin { to { transform: rotate(360deg); } }
+          @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+        </style></head><body>
+          <div class="logo">\(logo)</div>
+          <div class="title">Hitch</div>
+          <div>\(escaped)</div>
+          \(spinning ? "<div class=\"spinner\" aria-hidden=\"true\"></div>" : "")
+        </body></html>
+        """
+    }
 }
 
 let app = NSApplication.shared

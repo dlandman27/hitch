@@ -62,6 +62,14 @@
         <sl-tooltip content="Record a named run of an interaction. When you stop, Hitch compares it with the last run of the same name." id="run-tip">
           <button class="tb-btn" id="run-btn" type="button" aria-label="Record run"><sl-icon name="record-circle"></sl-icon><span class="tb-btn-label">Record</span></button>
         </sl-tooltip>
+        <span class="tb-sep" aria-hidden="true"></span>
+        <sl-tooltip content="Reload the app's JS (like pressing r in Metro)">
+          <button class="tb-btn" id="tb-reload" type="button" aria-label="Reload app"><sl-icon name="arrow-clockwise"></sl-icon></button>
+        </sl-tooltip>
+        <span class="tb-sep" aria-hidden="true"></span>
+        <sl-tooltip content="Clear everything shown. Hitch keeps watching.">
+          <button class="tb-btn" id="tb-clear" type="button" aria-label="Clear"><sl-icon name="trash3"></sl-icon></button>
+        </sl-tooltip>
       </div>
 
       <sl-dropdown id="more-menu" placement="bottom-end" distance="6" hoist>
@@ -71,6 +79,7 @@
           <sl-menu-item id="menu-sample">Sample native threads</sl-menu-item>
           <sl-menu-item id="menu-run">Record run…</sl-menu-item>
           <sl-divider></sl-divider>
+          <sl-menu-item id="menu-reload">Reload app</sl-menu-item>
           <sl-menu-item id="menu-report">Save report</sl-menu-item>
           <sl-menu-item id="reset-btn">Reset<span slot="suffix" class="menu-hint">clears what's shown</span></sl-menu-item>
           <sl-divider></sl-divider>
