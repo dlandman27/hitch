@@ -229,7 +229,12 @@ export function startEngine(initial) {
     (async () => {
       while (episode === current && inspector) {
         const frames = await inspector.captureStack();
-        if (frames && episode === current && current.snapshots.length < MAX_SNAPSHOTS) current.snapshots.push(frames);
+        // A pause takes effect at the next JS that runs. When the thread was busy
+        // in native code, that's often Hitch's own frame callback, which says
+        // nothing about the freeze: treat it as no stack. (The probe's own cost
+        // is measured separately and shown in health.)
+        const inProbe = frames?.[0]?.url === 'hitch-probe.js';
+        if (frames && !inProbe && episode === current && current.snapshots.length < MAX_SNAPSHOTS) current.snapshots.push(frames);
         await new Promise(r => setTimeout(r, SNAPSHOT_GAP_MS));
       }
     })();

@@ -51,8 +51,6 @@
         </sl-tooltip>
       </div>
 
-      <div class="vitals" id="vitals"></div>
-
       <sl-radio-group id="window-select" class="tb-segmented" size="small" value="30" label="Time window">
         <sl-radio-button value="15">15s</sl-radio-button>
         <sl-radio-button value="30">30s</sl-radio-button>
@@ -85,15 +83,7 @@
       <sl-icon slot="divider" name="grip-vertical"></sl-icon>
 
       <section slot="start" class="threads" aria-label="Threads">
-        <div class="section-head">
-          <h2>Threads</h2>
-          <sl-badge variant="neutral" pill id="thread-count">0</sl-badge>
-          <sl-tooltip hoist content="Every thread in the app, live. Each bar is how busy that thread was over 50ms, measured from your Mac with nothing running inside the app. Hover a name to see what that thread does. Click a marked freeze or shaded area to see what was running.">
-            <sl-icon name="info-circle" class="info-i"></sl-icon>
-          </sl-tooltip>
-          <div class="spacer"></div>
-          <div class="legend" id="legend"></div>
-        </div>
+        <div class="vitals-bar" id="vitals" aria-label="App vitals"></div>
         <sl-alert id="phone-note" variant="primary" hidden>
           <sl-icon slot="icon" name="phone"></sl-icon><span></span>
         </sl-alert>
@@ -112,6 +102,15 @@
           <sl-alert id="lanes-empty" variant="primary" hidden>
             <sl-icon slot="icon" name="info-circle"></sl-icon> Thread lanes need the app running in the iOS simulator.
           </sl-alert>
+        </div>
+        <div class="section-head threads-foot">
+          <h2>Threads</h2>
+          <sl-badge variant="neutral" pill id="thread-count">0</sl-badge>
+          <sl-tooltip hoist content="Every thread in the app, live. Each bar is how busy that thread was over 50ms, measured from your Mac with nothing running inside the app. Hover a name to see what that thread does. Click a marked freeze or shaded area to see what was running.">
+            <sl-icon name="info-circle" class="info-i"></sl-icon>
+          </sl-tooltip>
+          <div class="spacer"></div>
+          <div class="legend" id="legend"></div>
         </div>
       </section>
 

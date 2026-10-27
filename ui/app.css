@@ -399,41 +399,52 @@ sl-dropdown[open] .tb-capsule {
   background: var(--sys-red);
 }
 
-/* Vitals: compact readouts, value over label. */
-.vitals {
+/* Vitals: a readout bar over the lanes, label over value. */
+.vitals-bar {
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-width: 0;
-  overflow: hidden;
-  flex-shrink: 1;
+  min-height: 52px;
+  padding: 0 4px;
+  border-bottom: solid 1px var(--border);
+  overflow-x: auto;
+}
+
+.vitals-bar:empty {
+  display: none;
 }
 
 .vital {
   display: grid;
+  gap: 2px;
+  padding: 0 16px;
+  border-left: solid 1px var(--separator);
   line-height: 1.15;
   white-space: nowrap;
   cursor: help;
 }
 
+.vitals-bar sl-tooltip:first-child .vital {
+  border-left: 0;
+}
+
+.vital .vk {
+  font-size: 11px;
+  color: var(--label-2);
+}
+
 .vital .vv {
   display: flex;
   align-items: baseline;
-  gap: 4px;
+  gap: 6px;
   font-family: var(--font-rounded);
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--label);
 }
 
-.vital .vk {
-  font-size: 10px;
-  color: var(--label-2);
-}
-
 .vital .vd {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--sys-green);
 }
@@ -490,15 +501,8 @@ sl-dropdown[open] .tb-capsule {
   color: var(--label-3);
 }
 
-@media (max-width: 1280px) {
-  .tb-btn-label,
-  .vital .vk {
-    display: none;
-  }
-}
-
 @media (max-width: 1100px) {
-  .vitals {
+  .tb-btn-label {
     display: none;
   }
 }
@@ -553,7 +557,19 @@ sl-radio-group::part(form-control-label) {
 }
 
 .threads {
-  grid-template-rows: auto auto auto 1fr !important;
+  display: flex !important;
+  flex-direction: column;
+}
+
+.threads .lanes-wrap {
+  flex: 1;
+}
+
+/* The Threads label and legend sit under the lanes, like a status bar. */
+.threads-foot {
+  min-height: 36px;
+  border-top: solid 1px var(--border);
+  border-bottom: 0;
 }
 
 #stale-alert,
