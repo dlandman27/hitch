@@ -1487,8 +1487,9 @@ function relatedAround(from, to, excludeId) {
 }
 
 // The plain log lines around a moment, oldest first: what the app said it was doing.
-function logsSection(from, to) {
-  const lines = state.logs.filter(l => l.lastAt >= from && l.at <= to).slice(-20);
+// Log lines from the live session, or the ones a saved run carries.
+function logsSection(from, to, saved = null) {
+  const lines = (saved ?? state.logs).filter(l => (l.lastAt ?? l.at) >= from && l.at <= to).slice(-20);
   if (!lines.length) return null;
   const node = section('App logs', `${clock(from)}–${clock(to)}`);
   const list = el('div', 'log-lines');
@@ -1527,7 +1528,13 @@ function relatedSection(title, items) {
     b.size = 'small';
     b.variant = 'text';
     b.style.justifySelf = 'start';
-    b.addEventListener('click', () => select(e.id));
+    // Events from a saved run may no longer be in this session: open them as saved.
+    b.addEventListener('click', () => {
+      // Ids restart each session: only the same event (same id and time) opens live.
+      const live = findEvent(e.id);
+      if (live && live.at === e.at) select(e.id);
+      else showSaved(e);
+    });
     list.append(b);
   }
   node.append(list);
@@ -1913,9 +1920,12 @@ $('#report-btn').addEventListener('click', async () => {
 // ---------------------------------------------------------------- asking for a name
 
 // A small sheet with one text field; resolves with the text, or null if cancelled.
-function askText({ title, hint, value, ok }) {
+// With confirm: true there's no field, and it resolves true or null.
+function askText({ title, hint, value, ok, confirm = false, danger = false }) {
   const dialog = $('#ask-dialog');
   const input = $('#ask-input');
+  input.hidden = confirm;
+  $('#ask-ok').variant = danger ? 'danger' : 'primary';
   dialog.label = title;
   $('#ask-hint').textContent = hint ?? '';
   $('#ask-ok').textContent = ok ?? 'OK';
@@ -1927,6 +1937,7 @@ function askText({ title, hint, value, ok }) {
       dialog.hide();
     };
     const onOk = () => {
+      if (confirm) return done(true);
       const text = input.value.trim();
       if (text) done(text);
     };
@@ -1979,6 +1990,12 @@ function showRunResult({ run, previous, comparison }) {
            <ul class="run-compare">${comparison.lines.map(l => `<li>${esc(l.label)}: ${l.before}${l.unit} → ${l.after}${l.unit} ${arrow[l.change]}</li>`).join('')}</ul>`
         : '<p class="d-hint">The next run with this name will be compared with this one.</p>'
     }`;
+  const open = $('#run-dialog-open');
+  open.hidden = !run.id;
+  open.onclick = () => {
+    $('#run-dialog').hide();
+    showRun(run.id);
+  };
   $('#run-dialog').show();
 }
 
@@ -2096,7 +2113,7 @@ function renderRangeDetail(root, r) {
   if (requests) root.append(requests);
   const consoleEvents = relatedSection('Console errors & warnings', r.console);
   if (consoleEvents) root.append(consoleEvents);
-  const logs = logsSection(r.from, r.to);
+  const logs = logsSection(r.from, r.to, r.logs ?? null);
   if (logs) root.append(logs);
 }
 
@@ -2372,6 +2389,215 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
     copyView();
   }
+});
+
+// ---------------------------------------------------------------- runs, opened
+
+// An event from a saved run, shown read-only (it may be from another session).
+function showSaved(event) {
+  const root = openPage();
+  headerType = event.type;
+  const renderers = { stall: renderStallDetail, console: renderConsoleDetail, request: renderRequestDetail, jank: renderJankDetail, screen: renderScreenDetail, hot: renderHotDetail, startup: renderStartupDetail, leak: renderLeakDetail, threadleak: renderLeakDetail };
+  renderers[event.type]?.(root, event);
+  root.querySelector('.back')?.addEventListener('click', showList);
+  setActions(JSON.stringify(event, null, 2));
+}
+
+async function showCompare(a, b) {
+  const root = openPage();
+  const pair = await fetch(`/api/runs/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`).then(r => (r.ok ? r.json() : null)).catch(() => null);
+  if (!pair) {
+    root.insertAdjacentHTML('beforeend', '<sl-alert open variant="warning"><sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon><strong>Couldn’t compare these runs.</strong> Restart Hitch if it was just updated.</sl-alert>');
+    return;
+  }
+  const { before, after, comparison } = pair;
+  const delta = after.summary.blockedMs - before.summary.blockedMs;
+  const when = r => new Date(r.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const branch = r => (r.git?.branch ? ` · ${esc(r.git.branch)}@${esc(r.git.commit)}` : '');
+  root.insertAdjacentHTML(
+    'beforeend',
+    `${header('<sl-badge variant="primary">Compare runs</sl-badge>', `${delta > 0 ? '+' : delta < 0 ? '−' : ''}${Math.abs(delta)}`, 'ms JS blocked', `${esc(before.name)} → ${esc(after.name)}`)}
+    <p class="d-summary">Overall: <strong>${esc(comparison.verdict)}</strong>. JS was blocked ${before.summary.blockedMs}ms in “${esc(before.name)}” and ${after.summary.blockedMs}ms in “${esc(after.name)}”${before.summary.blockedMs ? ` (${delta <= 0 ? '' : '+'}${Math.round((delta / before.summary.blockedMs) * 100)}%)` : ''}.</p>`,
+  );
+  root.querySelector('.back').addEventListener('click', showList);
+
+  // Both runs as columns; the change on the right.
+  const metric = (label, x, y, unit = '', lowerIsBetter = true) => {
+    const change = x === y ? '<span style="color:var(--label-3)">≈</span>' : (y < x) === lowerIsBetter ? `<span class="delta better">${y < x ? '↓' : '↑'} ${Math.abs(y - x)}${unit}</span>` : `<span class="delta worse">${y < x ? '↓' : '↑'} ${Math.abs(y - x)}${unit}</span>`;
+    return `<div class="grow cmp-row"><span>${label}</span><span class="num">${x ?? '—'}${unit}</span><span class="num">${y ?? '—'}${unit}</span><span class="num">${change}</span></div>`;
+  };
+  const b0 = before.summary;
+  const a0 = after.summary;
+  const screenNames = [...new Set([...b0.screens, ...a0.screens].map(sc => sc.name))];
+  const screenMs = (sum, name) => sum.screens.find(sc => sc.name === name)?.ms;
+  const table = section('Side by side', 'lower is better');
+  table.insertAdjacentHTML(
+    'beforeend',
+    `<div class="gtable cmp-table">
+      <div class="grow ghead cmp-row"><span></span><span class="num">${esc(before.name)}</span><span class="num">${esc(after.name)}</span><span class="num">Change</span></div>
+      ${metric('JS blocked', b0.blockedMs, a0.blockedMs, 'ms')}
+      ${metric('Freezes', b0.stalls, a0.stalls)}
+      ${metric('Worst freeze', b0.worstStallMs, a0.worstStallMs, 'ms')}
+      ${metric('Choppy seconds', b0.jankSeconds, a0.jankSeconds, 's')}
+      ${metric('Dropped frames', b0.droppedFrames, a0.droppedFrames)}
+      ${b0.renders && a0.renders ? metric('React render time', b0.renders.renderMs, a0.renders.renderMs, 'ms') + metric('Component mounts', b0.renders.mounts, a0.renders.mounts) + metric('Avoidable re-renders', b0.renders.avoidable, a0.renders.avoidable) : ''}
+      ${screenNames.map(name => metric(`${esc(name)} screen load`, screenMs(b0, name), screenMs(a0, name), 'ms')).join('')}
+      ${metric('Console errors', b0.errors, a0.errors)}
+      ${metric('Slow requests', b0.slowRequests, a0.slowRequests)}
+      ${metric('Failed requests', b0.failedRequests, a0.failedRequests)}
+    </div>
+    <p class="d-hint">${esc(before.name)}: ${when(before)}${branch(before)} · ${esc(after.name)}: ${when(after)}${branch(after)}</p>`,
+  );
+  root.append(table);
+
+  // Where React time and blocked time went, in each run.
+  const columns = (title, render) => {
+    const node = section(title);
+    node.insertAdjacentHTML('beforeend', `<div class="cmp-cols"><div><h4>${esc(before.name)}</h4>${render(before)}</div><div><h4>${esc(after.name)}</h4>${render(after)}</div></div>`);
+    root.append(node);
+  };
+  const list = rows => (rows.length ? `<div class="gtable">${rows.join('')}</div>` : '<p class="d-hint">None.</p>');
+  if (b0.renders || a0.renders) columns('Most React render time', r => list((r.summary.renders?.top ?? []).map(c => `<div class="grow" style="grid-template-columns:minmax(0,1fr) auto"><span class="name">${esc(c.name)}</span><span class="num">${c.ms}ms ×${c.renders}</span></div>`)));
+  columns('Lines that blocked the JS thread', r => list((r.summary.offenders ?? []).map(o => `<div class="grow" style="grid-template-columns:minmax(0,1fr) auto"><span class="mono">${esc(o.where)}</span><span class="num">${o.blockedMs}ms</span></div>`)));
+
+  const open = el('div', 'cmp-open');
+  for (const r of [before, after]) {
+    const b = el('sl-button', '', `Open “${esc(r.name)}”`);
+    b.size = 'small';
+    b.addEventListener('click', () => showRun(r.id));
+    open.append(b);
+  }
+  root.append(open);
+  const prompt = await fetch(`/api/prompt?compare=${encodeURIComponent(a)},${encodeURIComponent(b)}`).then(r => (r.ok ? r.json() : null)).catch(() => null);
+  setActions(prompt?.prompt ?? `${before.name} → ${after.name}: ${comparison.verdict}`);
+}
+
+async function showRun(id) {
+  const root = openPage();
+  const found = await fetch(`/api/run?id=${encodeURIComponent(id)}`).then(r => (r.ok ? r.json() : null)).catch(() => null);
+  if (!found) {
+    root.insertAdjacentHTML('beforeend', '<sl-alert open variant="warning"><sl-icon slot="icon" name="exclamation-triangle-fill"></sl-icon><strong>Couldn’t open this run.</strong> Restart Hitch if it was just updated.</sl-alert>');
+    return;
+  }
+  const { run, previous, comparison } = found;
+  const s = run.summary;
+  const when = new Date(run.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  root.insertAdjacentHTML('beforeend', header(`<sl-badge variant="primary">Run · ${esc(run.name)}</sl-badge>`, s.blockedMs, 'ms JS blocked', `${when}${run.git?.branch ? ` · ${esc(run.git.branch)}@${esc(run.git.commit)}${run.git.dirty ? ' (uncommitted changes)' : ''}` : ''}${s.iterations ? ` · median of ${s.iterations} plays` : ''}`));
+  root.querySelector('.back').addEventListener('click', showList);
+  const stat = (k, v, sub = '') => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
+  root.insertAdjacentHTML(
+    'beforeend',
+    `<div class="stat-row">
+      ${stat('Freezes', s.stalls, `worst ${s.worstStallMs}ms${s.devOnlyMs ? ` · ${s.devOnlyMs}ms dev-only` : ''}`)}
+      ${stat('Choppy', `${s.jankSeconds}s`, `${s.droppedFrames} frames dropped`)}
+      ${stat('Errors', s.errors, `${s.warnings} warnings`)}
+      ${s.renders ? stat('React', `${s.renders.renderMs}ms`, `${s.renders.avoidable} avoidable re-renders`) : stat('Requests', s.slowRequests + s.failedRequests, `${s.slowRequests} slow · ${s.failedRequests} failed`)}
+    </div>`,
+  );
+  if (s.screens.length) root.insertAdjacentHTML('beforeend', `<p class="d-summary d-context">Screens: ${s.screens.map(sc => `${esc(sc.name)} ${(sc.ms / 1000).toFixed(1)}s`).join(' · ')}</p>`);
+
+  if (comparison) {
+    const node = section(`Compared with the previous “${esc(run.name)}”`, `${esc(previous.git?.branch ?? '')}@${esc(previous.git?.commit ?? '')} · ${new Date(previous.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`);
+    const arrow = { better: '<span class="delta better">↓ better</span>', worse: '<span class="delta worse">↑ worse</span>', same: '<span style="color:var(--label-3)">≈ same</span>' };
+    node.insertAdjacentHTML(
+      'beforeend',
+      `<p class="d-summary" style="margin-top:0">Overall: <strong>${esc(comparison.verdict)}</strong></p>
+      <div class="gtable"><div class="grow ghead" style="grid-template-columns:minmax(0,1fr) 90px 90px 80px"><span>Measure</span><span class="num">Before</span><span class="num">This run</span><span></span></div>
+      ${comparison.lines.map(l => `<div class="grow" style="grid-template-columns:minmax(0,1fr) 90px 90px 80px"><span>${esc(l.label)}</span><span class="num">${l.before}${l.unit}</span><span class="num">${l.after}${l.unit}</span><span class="num">${arrow[l.change]}</span></div>`).join('')}</div>`,
+    );
+    const open = el('sl-button', '', '<sl-icon slot="prefix" name="arrow-left-right"></sl-icon>Open the previous run');
+    open.size = 'small';
+    open.style.marginTop = '10px';
+    open.addEventListener('click', () => showRun(previous.id));
+    node.append(open);
+    root.append(node);
+  }
+
+  if (s.offenders?.length) {
+    const node = section('Lines that blocked the JS thread');
+    node.insertAdjacentHTML('beforeend', `<div class="gtable">${s.offenders.map(o => `<div class="grow" style="grid-template-columns:minmax(0,1fr) 80px"><span class="mono">${esc(o.where)}</span><span class="num">${o.blockedMs}ms</span></div>`).join('')}</div>`);
+    root.append(node);
+  }
+
+  if (run.detail) {
+    renderRangeDetail(root, run.detail);
+  } else {
+    root.insertAdjacentHTML('beforeend', '<p class="d-hint" style="margin-top:16px">This run was recorded by an older Hitch, so only its numbers were saved. Runs recorded from now on keep every freeze, render, request and log.</p>');
+  }
+  const compareWith = el('sl-button', '', '<sl-icon slot="prefix" name="arrow-left-right"></sl-icon>Compare with…');
+  compareWith.size = 'small';
+  compareWith.style.marginTop = '22px';
+  compareWith.style.marginRight = '8px';
+  compareWith.addEventListener('click', () => {
+    compareSel.clear();
+    compareSel.add(id);
+    setView('runs');
+    showList();
+    toast('Tick another run, then press Compare.');
+  });
+  root.append(compareWith);
+  const del = el('sl-button', '', '<sl-icon slot="prefix" name="trash3"></sl-icon>Delete run');
+  del.size = 'small';
+  del.variant = 'text';
+  del.className = 'delete-run';
+  del.addEventListener('click', async () => {
+    if (await deleteRun(id, run.name)) showList();
+  });
+  root.append(del);
+  const prompt = await fetch(`/api/prompt?run=${encodeURIComponent(id)}`).then(r => (r.ok ? r.json() : null)).catch(() => null);
+  setActions(prompt?.prompt ?? `Run "${run.name}": ${JSON.stringify(s)}`);
+}
+
+async function deleteRun(id, name) {
+  const ok = await askText({ title: `Delete “${name}”?`, hint: 'The saved run is removed from ~/.hitch/runs. This can’t be undone.', confirm: true, danger: true, ok: 'Delete run' });
+  if (!ok) return false;
+  const res = await fetch(`/api/run?id=${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => r.json()).catch(() => ({ error: 'Restart Hitch to delete runs.' }));
+  if (res.error) {
+    toast(res.error, 'danger');
+    return false;
+  }
+  toast(`Deleted “${name}”.`, 'success');
+  // The list on the left drops it straight away, wherever it was deleted from.
+  compareSel.delete(id);
+  if (state.view === 'runs') await refreshView('runs');
+  return true;
+}
+
+// Runs picked for comparison (at most two; picking a third drops the oldest pick).
+const compareSel = new Set();
+function pickRun(id, on) {
+  if (on) {
+    compareSel.add(id);
+    while (compareSel.size > 2) compareSel.delete(compareSel.values().next().value);
+  } else compareSel.delete(id);
+  viewRenderers.runs();
+}
+
+$('#view-runs').addEventListener('click', e => {
+  const pick = e.target.closest('.run-pick');
+  if (pick) {
+    e.stopPropagation();
+    pickRun(pick.dataset.run, pick.checked);
+    return;
+  }
+  if (e.target.closest('#compare-go')) {
+    const [a, b] = [...compareSel];
+    showCompare(a, b);
+    return;
+  }
+  if (e.target.closest('#compare-clear')) {
+    compareSel.clear();
+    viewRenderers.runs();
+    return;
+  }
+  const del = e.target.closest('.run-delete');
+  if (del) {
+    e.stopPropagation();
+    deleteRun(del.dataset.run, del.dataset.name);
+    return;
+  }
+  const row = e.target.closest('.grow[data-run]');
+  if (row?.dataset.run) showRun(row.dataset.run);
 });
 
 // ---------------------------------------------------------------- views
@@ -2738,16 +2964,17 @@ viewRenderers.runs = async () => {
   };
   view.innerHTML = `<div class="view-body">
     <h3>Runs <small>${data.runs.length} saved${data.active ? ` · recording “${esc(data.active.name)}”` : ''}</small></h3>
-    <p class="view-caption">Arrows compare each run with the previous run of the same name; lower is better.</p>
+    <p class="view-caption">Arrows compare each run with the previous run of the same name; lower is better. Tick any two runs to compare them.</p>
+    <div class="compare-bar" ${compareSel.size ? '' : 'hidden'}><span>${compareSel.size === 2 ? 'Two runs picked.' : compareSel.size === 1 ? 'Pick one more run to compare.' : ''}</span><sl-button size="small" variant="primary" id="compare-go" ${compareSel.size === 2 ? '' : 'disabled'}><sl-icon slot="prefix" name="arrow-left-right"></sl-icon>Compare</sl-button><sl-button size="small" variant="text" id="compare-clear">Clear</sl-button></div>
     <div class="gtable runs-table">
-      <div class="grow ghead"><span>Run</span><span class="num">JS blocked</span><span class="num">Freezes</span><span class="num">Choppy</span><span class="num">Errors</span></div>
+      <div class="grow ghead"><span></span><span>Run</span><span class="num">JS blocked</span><span class="num">Freezes</span><span class="num">Choppy</span><span class="num">Errors</span><span></span></div>
       ${rows
         .reverse()
         .map(({ run, before }) => {
           const s2 = run.summary;
           const b = before?.summary;
-          return `<div class="grow"><span><span class="name">${esc(run.name)}${s2.iterations ? ` <small style="color:var(--label-3)">median of ${s2.iterations}</small>` : ''}</span><span style="color:var(--label-2);font-size:11.5px">${new Date(run.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}${run.git?.branch ? ` · ${esc(run.git.branch)}@${esc(run.git.commit)}` : ''}</span></span>
-            <span class="num">${s2.blockedMs}ms${delta(b?.blockedMs, s2.blockedMs, 'ms')}</span><span class="num">${s2.stalls}${delta(b?.stalls, s2.stalls)}</span><span class="num">${s2.jankSeconds}s${delta(b?.jankSeconds, s2.jankSeconds, 's')}</span><span class="num">${s2.errors}${delta(b?.errors, s2.errors)}</span></div>`;
+          return `<div class="grow clickable${compareSel.has(run.id) ? ' picked' : ''}" data-run="${esc(run.id ?? '')}"><input type="checkbox" class="run-pick" aria-label="Pick ${esc(run.name)} to compare" data-run="${esc(run.id ?? '')}" ${compareSel.has(run.id) ? 'checked' : ''} /><span><span class="name">${esc(run.name)}${s2.iterations ? ` <small style="color:var(--label-3)">median of ${s2.iterations}</small>` : ''}</span><span style="color:var(--label-2);font-size:11.5px">${new Date(run.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}${run.git?.branch ? ` · ${esc(run.git.branch)}@${esc(run.git.commit)}` : ''}</span></span>
+            <span class="num">${s2.blockedMs}ms${delta(b?.blockedMs, s2.blockedMs, 'ms')}</span><span class="num">${s2.stalls}${delta(b?.stalls, s2.stalls)}</span><span class="num">${s2.jankSeconds}s${delta(b?.jankSeconds, s2.jankSeconds, 's')}</span><span class="num">${s2.errors}${delta(b?.errors, s2.errors)}</span><button class="tb-btn run-delete" type="button" title="Delete this run" aria-label="Delete run ${esc(run.name)}" data-run="${esc(run.id ?? '')}" data-name="${esc(run.name)}"><sl-icon name="trash3"></sl-icon></button></div>`;
         })
         .join('')}
     </div></div>`;

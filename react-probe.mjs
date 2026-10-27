@@ -12,7 +12,9 @@
 // Runs inside the app (Hermes). Plain ES2015, no imports, never throws into React.
 export const PROBE_SOURCE = String.raw`(function () {
   var g = globalThis;
-  if (g.__HITCH__ && g.__HITCH__.version === 1) { g.__HITCH__.resume(); return 'ok'; }
+  if (g.__HITCH__ && g.__HITCH__.version === 2) { g.__HITCH__.resume(); return 'ok'; }
+  // An older probe from an earlier Hitch: take its place.
+  if (g.__HITCH__ && g.__HITCH__.stop) { try { g.__HITCH__.stop(); } catch (e) {} }
   var hook = g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook || typeof hook.onCommitFiberRoot !== 'function') return 'no-hook';
 
@@ -211,10 +213,75 @@ export const PROBE_SOURCE = String.raw`(function () {
     if (on && hook.onCommitFiberRoot !== wrapped) { original = hook.onCommitFiberRoot; hook.onCommitFiberRoot = wrapped; }
   }, 2000);
 
+  // Requests made with a fetch the debugger can't see (Expo's native fetch,
+  // or any non-polyfill fetch): recorded here instead. React Native's own
+  // fetch is a polyfill over XHR, which its network agent already reports,
+  // so it's left alone and nothing is counted twice.
+  var NET_MAX = 200, BODY_MAX = 262144, REQ_BODY_MAX = 65536;
+  var requests = [];
+  var originalFetch = g.fetch;
+  function headersOf(h) {
+    var out = {};
+    try {
+      if (!h) return out;
+      if (typeof h.forEach === 'function') h.forEach(function (v, k) { out[k] = String(v); });
+      else if (Array.isArray(h)) h.forEach(function (pair) { out[pair[0]] = String(pair[1]); });
+      else for (var k in h) out[k] = String(h[k]);
+    } catch (e) {}
+    return out;
+  }
+  function record(entry) {
+    requests.push(entry);
+    if (requests.length > NET_MAX) requests.shift();
+  }
+  var hookedFetch = null;
+  if (typeof originalFetch === 'function' && !originalFetch.polyfill && !originalFetch.__hitch) {
+    hookedFetch = function (input, init) {
+      var p = originalFetch.apply(this, arguments);
+      if (!on) return p;
+      var entry = null;
+      try {
+        var req = input && typeof input === 'object' ? input : null;
+        entry = {
+          at: Date.now(),
+          url: typeof input === 'string' ? input : (req && req.url) || String(input),
+          method: String((init && init.method) || (req && req.method) || 'GET').toUpperCase(),
+          requestHeaders: headersOf((init && init.headers) || (req && req.headers)),
+          requestBody: init && typeof init.body === 'string' ? init.body.slice(0, REQ_BODY_MAX) : null,
+          requestBodySize: init && typeof init.body === 'string' ? init.body.length : null,
+          stack: new Error().stack,
+        };
+      } catch (e) { return p; }
+      p.then(function (res) {
+        entry.ms = Date.now() - entry.at;
+        entry.status = res.status;
+        entry.responseHeaders = headersOf(res.headers);
+        entry.mime = entry.responseHeaders['content-type'] || null;
+        // The app reads the original; the body here comes from a copy.
+        if (/json|text|xml|javascript|html/i.test(entry.mime || '') && typeof res.clone === 'function') {
+          try {
+            res.clone().text().then(function (t) { entry.body = t.slice(0, BODY_MAX); entry.bodySize = t.length; record(entry); }, function () { record(entry); });
+            return;
+          } catch (e) {}
+        }
+        record(entry);
+      }, function (err) {
+        entry.ms = Date.now() - entry.at;
+        entry.failed = true;
+        entry.error = String((err && err.message) || err);
+        record(entry);
+      });
+      return p;
+    };
+    hookedFetch.__hitch = true;
+    g.fetch = hookedFetch;
+  }
+
   g.__HITCH__ = {
-    version: 1,
+    version: 2,
     poll: function () {
-      var out = { screen: screen, commits: commits, screens: screens, frames: [] };
+      var out = { screen: screen, commits: commits, screens: screens, frames: [], requests: requests };
+      requests = [];
       var nowSec = Math.floor(Date.now() / 1000);
       for (var s in frames) if (+s < nowSec) { out.frames.push([+s, frames[s][0], Math.max(0, Math.round(frames[s][1])), frames[s][2]]); delete frames[s]; }
       commits = []; screens = [];
@@ -222,7 +289,7 @@ export const PROBE_SOURCE = String.raw`(function () {
     },
     pause: function () { on = false; },
     resume: function () { on = true; },
-    stop: function () { on = false; clearInterval(guard); if (hook.onCommitFiberRoot === wrapped) hook.onCommitFiberRoot = original; g.__HITCH__ = null; },
+    stop: function () { on = false; clearInterval(guard); if (hook.onCommitFiberRoot === wrapped) hook.onCommitFiberRoot = original; if (hookedFetch && g.fetch === hookedFetch) g.fetch = originalFetch; g.__HITCH__ = null; },
   };
   return 'ok';
 })()

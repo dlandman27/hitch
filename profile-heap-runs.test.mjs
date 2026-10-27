@@ -149,3 +149,48 @@ test('several plays of a scenario are summarized by their medians', async () => 
   assert.deepEqual(merged.spread.blockedMs, [700, 1900]);
   assert.deepEqual(merged.screens, [{ name: 'lobby', ms: 5000 }]);
 });
+
+test('a saved run keeps its full breakdown and can be opened with its comparison', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hitch-run-detail-'));
+  const now = Date.now();
+  const h = {
+    stalls: [{ type: 'stall', id: 1, at: now + 200, ms: 300, devOnly: null, culprits: [{ key: 'k', name: 'Feed', kind: 'app', file: 'src/Feed.tsx', line: 3, count: 1, snapshot: 1 }], snapshots: [[{ name: 'a' }], [{ name: 'b' }]] }],
+    jank: [], console: [], requests: [{ type: 'request', id: 2, at: now + 300, ms: 80, url: 'https://x/y', method: 'GET', status: 200, issue: false }], vitals: [], screens: [], logs: [], alerts: [], hot: [], lanes: [],
+  };
+  const engine = { history: () => h, status: () => ({ appId: 'com.x' }), renders: () => null };
+  const runs = createRuns({ engine, root: () => dir, dir });
+  runs.start('open feed');
+  const first = await runs.stop();
+  assert.equal(first.run.detail, undefined);
+  const list = runs.list('open feed');
+  assert.equal(list.length, 1);
+  assert.equal(list[0].detail, undefined);
+  const opened = runs.get(list[0].id);
+  assert.equal(opened.run.detail.stalls.length, 1);
+  assert.deepEqual(opened.run.detail.stalls[0].snapshots, [[], [{ name: 'b' }]]);
+  assert.equal(opened.run.detail.requests.length, 1);
+  assert.equal(opened.previous, null);
+  await new Promise(r => setTimeout(r, 5));
+  runs.start('open feed');
+  await runs.stop();
+  const second = runs.list('open feed').at(-1);
+  const both = runs.get(second.id);
+  assert.equal(both.previous.id, list[0].id);
+  assert.ok(both.comparison);
+  assert.equal(runs.get('../etc/passwd'), null);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('runs can be deleted, and only by a well-formed id', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hitch-run-delete-'));
+  const engine = { history: () => ({ stalls: [], jank: [], console: [], requests: [], vitals: [], screens: [], logs: [], alerts: [], hot: [], lanes: [] }), status: () => ({}), renders: () => null };
+  const runs = createRuns({ engine, root: () => dir, dir });
+  runs.start('home v1');
+  await runs.stop();
+  const [run] = runs.list();
+  assert.equal(runs.remove('../../etc/passwd'), false);
+  assert.equal(runs.remove(run.id), true);
+  assert.equal(runs.list().length, 0);
+  assert.equal(fs.existsSync(path.join(dir, 'home-v1')), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

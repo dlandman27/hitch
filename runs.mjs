@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { rankOffenders } from './engine.mjs';
+import { summarizeRange } from './range.mjs';
 
 const RUNS_DIR = path.join(os.homedir(), '.hitch', 'runs');
 const SCENARIOS_DIR = path.join(os.homedir(), '.hitch', 'scenarios');
@@ -208,6 +209,20 @@ export function createScenarios({ dir = SCENARIOS_DIR } = {}) {
   };
 }
 
+const withoutDetail = ({ detail, ...rest }) => rest;
+
+// What a run keeps of its window: everything a range shows, trimmed to stay a
+// reasonable size on disk (stalls keep the stack captures their culprits came
+// from; response bodies are never part of history, so never saved).
+const RUN_STALLS_KEPT = 100;
+export function runDetail(range) {
+  const stalls = range.stalls.slice(-RUN_STALLS_KEPT).map(st => {
+    const keep = new Set((st.culprits ?? []).map(c => c.snapshot));
+    return { ...st, snapshots: (st.snapshots ?? []).map((frames, i) => (keep.has(i) ? frames : [])) };
+  });
+  return { ...range, stalls, requests: range.requests.slice(-200), logs: range.logs.slice(-100) };
+}
+
 export function createRuns({ engine, root, dir = RUNS_DIR }) {
   let active = null;
 
@@ -226,17 +241,20 @@ export function createRuns({ engine, root, dir = RUNS_DIR }) {
     // Freezes still being written up land in history a moment later.
     await new Promise(r => setTimeout(r, 1500));
     const to = Date.now();
-    return { run, summary: summarizeRun(engine.history(), run.startedAt, to, engine.renders?.(run.startedAt, to)) };
+    const history = engine.history();
+    const renders = engine.renders?.(run.startedAt, to);
+    return { run, summary: summarizeRun(history, run.startedAt, to, renders), detail: runDetail(summarizeRange(history, run.startedAt, to, renders)) };
   };
 
-  const save = (run, summary) => {
-    const record = { name: run.name, startedAt: new Date(run.startedAt).toISOString(), app: engine.status().appId, git: gitInfo(root()), summary };
+  const save = (run, summary, detail) => {
+    const record = { name: run.name, startedAt: new Date(run.startedAt).toISOString(), app: engine.status().appId, git: gitInfo(root()), summary, detail };
     const previous = previousRun(run.name);
     const folder = path.join(dir, slug(run.name));
     fs.mkdirSync(folder, { recursive: true });
     const file = path.join(folder, `${record.startedAt.replace(/[:.]/g, '-')}.json`);
-    fs.writeFileSync(file, JSON.stringify(record, null, 2));
-    return { run: record, file, previous, comparison: previous ? compareRuns(previous.summary, summary) : null };
+    fs.writeFileSync(file, JSON.stringify(record));
+    record.id = `${slug(run.name)}/${path.basename(file, '.json')}`;
+    return { run: withoutDetail(record), file, previous: previous && withoutDetail(previous), comparison: previous ? compareRuns(previous.summary, summary) : null };
   };
 
   return {
@@ -248,8 +266,8 @@ export function createRuns({ engine, root, dir = RUNS_DIR }) {
       return active;
     },
     async stop() {
-      const { run, summary } = await measure();
-      return save(run, summary);
+      const { run, summary, detail } = await measure();
+      return save(run, summary, detail);
     },
 
     // Plays a scenario's steps `times` times as one run: single runs of the
@@ -258,6 +276,7 @@ export function createRuns({ engine, root, dir = RUNS_DIR }) {
       validateSteps(steps);
       const summaries = [];
       let first = null;
+      let detail = null;
       for (let i = 0; i < times; i++) {
         this.start(name);
         try {
@@ -266,12 +285,15 @@ export function createRuns({ engine, root, dir = RUNS_DIR }) {
           await measure().catch(() => {});
           throw error;
         }
-        const { run, summary } = await measure();
-        first ??= run;
-        summaries.push(summary);
+        const measured = await measure();
+        first ??= measured.run;
+        // The full breakdown is the last play's; the numbers are medians.
+        detail = measured.detail;
+        summaries.push(measured.summary);
       }
-      return save(first, medianSummary(summaries));
+      return save(first, medianSummary(summaries), detail);
     },
+    // Runs without their breakdowns (that's what lists need), with ids.
     list(name) {
       if (!fs.existsSync(dir)) return [];
       const names = name ? [slug(name)] : fs.readdirSync(dir);
@@ -282,8 +304,31 @@ export function createRuns({ engine, root, dir = RUNS_DIR }) {
           .readdirSync(folder)
           .filter(f => f.endsWith('.json'))
           .sort()
-          .map(f => JSON.parse(fs.readFileSync(path.join(folder, f), 'utf8')));
+          .map(f => ({ ...withoutDetail(JSON.parse(fs.readFileSync(path.join(folder, f), 'utf8'))), id: `${n}/${f.replace(/\.json$/, '')}` }));
       });
+    },
+    // Deletes one saved run (and its folder once empty).
+    remove(id) {
+      const match = String(id ?? '').match(/^([a-z0-9-]+)\/([\w-]+)$/);
+      if (!match) return false;
+      const folder = path.join(dir, match[1]);
+      const file = path.join(folder, `${match[2]}.json`);
+      if (!fs.existsSync(file)) return false;
+      fs.rmSync(file);
+      if (!fs.readdirSync(folder).length) fs.rmdirSync(folder);
+      return true;
+    },
+    // One run in full, with the run before it of the same name for comparison.
+    get(id) {
+      const match = String(id ?? '').match(/^([a-z0-9-]+)\/([\w-]+)$/);
+      if (!match) return null;
+      const folder = path.join(dir, match[1]);
+      const file = path.join(folder, `${match[2]}.json`);
+      if (!fs.existsSync(file)) return null;
+      const run = { ...JSON.parse(fs.readFileSync(file, 'utf8')), id };
+      const earlier = fs.readdirSync(folder).filter(f => f.endsWith('.json') && f < `${match[2]}.json`).sort().at(-1);
+      const previous = earlier ? { ...withoutDetail(JSON.parse(fs.readFileSync(path.join(folder, earlier), 'utf8'))), id: `${match[1]}/${earlier.replace(/\.json$/, '')}` } : null;
+      return { run, previous, comparison: previous ? compareRuns(previous.summary, run.summary) : null };
     },
   };
 }

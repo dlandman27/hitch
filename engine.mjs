@@ -328,6 +328,7 @@ export function startEngine(initial) {
           setStatus({ screen: out.screen });
         }
         if (out.frames.length) onFrames(out.frames);
+        for (const request of out.requests ?? []) observers.onProbeRequest(request);
       })().finally(() => {
         probe.polling = null;
       });

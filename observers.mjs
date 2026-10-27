@@ -245,6 +245,55 @@ export function createObservers({ publish, settings, nextId, symbolicate, getPid
     }
   };
 
+  // Requests the in-app probe recorded (fetch implementations the debugger
+  // can't see, like Expo's native fetch): same shape as debugger-reported ones.
+  const STACK_LINE = /at (?:(.*?) \()?((?:https?|file):\/\/[^\s)]+):(\d+):(\d+)\)?/;
+  const framesFromStack = stack =>
+    String(stack ?? '')
+      .split('\n')
+      .map(line => line.match(STACK_LINE))
+      .filter(Boolean)
+      .map(([, name, url, line, column]) => ({ functionName: name ?? '', url, lineNumber: Number(line) - 1, columnNumber: Number(column) - 1 }))
+      .filter(f => !f.url.includes('hitch-probe'))
+      .slice(0, 20);
+
+  const onProbeRequest = async raw => {
+    const failed = Boolean(raw.failed) || (raw.status ?? 0) >= 400;
+    const ms = raw.ms ?? 0;
+    const event = {
+      type: 'request',
+      id: nextId(),
+      at: raw.at,
+      ms,
+      url: raw.url,
+      method: raw.method,
+      status: raw.status ?? null,
+      bytes: raw.bodySize ?? null,
+      failed,
+      error: raw.error ?? null,
+      canceled: false,
+      issue: failed || ms >= settings.slowRequestMs,
+      source: null,
+      mime: raw.mime ?? null,
+      requestHeaders: redactHeaders(raw.requestHeaders),
+      requestBody: raw.requestBody != null ? { ...clip(redactBody(raw.requestBody), REQUEST_BODY_MAX), size: raw.requestBodySize ?? raw.requestBody.length } : null,
+      responseHeaders: redactHeaders(raw.responseHeaders),
+      bodySize: raw.bodySize ?? null,
+      // Seen by Hitch's probe rather than the app's network agent.
+      via: 'probe',
+    };
+    if (raw.body != null) bodies.set(event.id, { ...clip(redactBody(raw.body), BODY_MAX), size: raw.bodySize ?? raw.body.length, base64: false });
+    const frames = framesFromStack(raw.stack);
+    if (frames.length) {
+      const described = await symbolicate(frames).catch(() => []);
+      event.source = described.find(f => f.kind === 'app') ?? null;
+      if (event.issue) event.frames = described;
+    }
+    requests.push(event);
+    if (requests.length > REQUEST_HISTORY) requests.shift();
+    publish(event);
+  };
+
   // ---------------------------------------------------------------- startup
 
   // One startup in progress at a time: from launch/reload to the app settling.
@@ -392,6 +441,7 @@ export function createObservers({ publish, settings, nextId, symbolicate, getPid
       return onConsole(raw).catch(() => {});
     },
     onNetwork,
+    onProbeRequest: raw => onProbeRequest(raw).catch(() => {}),
     onLanes,
     setThreadCount: n => {
       threadCount = n;

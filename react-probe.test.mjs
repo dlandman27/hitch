@@ -115,3 +115,41 @@ test('a long frame gap is spread over the seconds it spans', () => {
   assert.ok(bySec[11].dropped >= 59 && bySec[11].dropped <= 60, `second 11: ${bySec[11].dropped}`);
   assert.equal(bySec[12].worst, 16);
 });
+
+test('the probe records requests from a fetch the debugger cannot see, and leaves the RN polyfill alone', async () => {
+  const makeContext = fetchImpl => {
+    const context = { setInterval: () => 0, clearInterval: () => {}, requestAnimationFrame: () => {}, Date, Error, Promise, JSON, String, Array, fetch: fetchImpl, __REACT_DEVTOOLS_GLOBAL_HOOK__: { onCommitFiberRoot: () => {} } };
+    context.globalThis = context;
+    vm.createContext(context);
+    vm.runInContext(PROBE_SOURCE, context);
+    return context;
+  };
+  const response = {
+    status: 200,
+    headers: new Map([['content-type', 'application/json']]),
+    clone() {
+      return { text: async () => '{"recipes":[1,2]}' };
+    },
+    text: async () => '{"recipes":[1,2]}',
+  };
+  const native = async () => response;
+  const context = makeContext(native);
+  assert.notEqual(context.fetch, native);
+  const res = await context.fetch('https://api.example.com/recipes', { method: 'post', headers: { Authorization: 'Bearer x' }, body: '{"q":1}' });
+  assert.equal(res, response);
+  await new Promise(r => setTimeout(r, 10));
+  const out = JSON.parse(vm.runInContext('__HITCH__.poll()', context));
+  assert.equal(out.requests.length, 1);
+  const [request] = out.requests;
+  assert.equal(request.method, 'POST');
+  assert.equal(request.status, 200);
+  assert.equal(request.body, '{"recipes":[1,2]}');
+  assert.equal(request.requestBody, '{"q":1}');
+  assert.equal(request.requestHeaders.Authorization, 'Bearer x');
+  assert.equal(request.mime, 'application/json');
+
+  const polyfill = async () => response;
+  polyfill.polyfill = true;
+  const rn = makeContext(polyfill);
+  assert.equal(rn.fetch, polyfill);
+});

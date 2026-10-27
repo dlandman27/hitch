@@ -10,7 +10,7 @@ import { buildPrompt, openInEditor, readSource, sendToClaude } from './handoff.m
 import { createMcp } from './mcp.mjs';
 import { avoidableRows } from './engine.mjs';
 import { rangePrompt, summarizeRange } from './range.mjs';
-import { compareRuns, createRuns } from './runs.mjs';
+import { compareRuns, createRuns, describeComparison, describeRun } from './runs.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 // Browsers ask for /favicon.ico whatever the page links.
@@ -222,6 +222,71 @@ export function startServer({ engine, port, onWindowsClosed }) {
         },
         error => json(res, 400, { error: error.message }),
       );
+    }
+
+    if (req.method === 'DELETE' && url.pathname === '/api/run') {
+      return runs.remove(url.searchParams.get('id')) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'No such run.' });
+    }
+
+    if (url.pathname === '/api/run') {
+      const found = runs.get(url.searchParams.get('id'));
+      return found ? json(res, 200, found) : json(res, 404, { error: 'No such run.' });
+    }
+
+    // Any two runs side by side, older first, whatever their names.
+    const pairOf = (a, b) => {
+      const x = runs.get(a)?.run;
+      const y = runs.get(b)?.run;
+      if (!x || !y) return null;
+      const [before, after] = x.startedAt <= y.startedAt ? [x, y] : [y, x];
+      return { before, after, comparison: compareRuns(before.summary, after.summary) };
+    };
+
+    if (url.pathname === '/api/runs/compare') {
+      const pair = pairOf(url.searchParams.get('a'), url.searchParams.get('b'));
+      return pair ? json(res, 200, pair) : json(res, 404, { error: 'Pick two saved runs.' });
+    }
+
+    if (url.pathname === '/api/prompt' && url.searchParams.has('compare')) {
+      const [a, b] = url.searchParams.get('compare').split(',');
+      const pair = pairOf(a, b);
+      if (!pair) return json(res, 404, { error: 'Pick two saved runs.' });
+      const top = r => (r.summary.renders?.top ?? []).map(c => `${c.name} (${c.ms}ms, ×${c.renders})`).join(', ') || '—';
+      const lines = r => (r.summary.offenders ?? []).map(o => `  - ${o.blockedMs}ms ${o.where}`);
+      const prompt = [
+        `# Compare two runs: "${pair.before.name}" → "${pair.after.name}"`,
+        '',
+        'Recorded with Hitch on a React Native dev build. Absolute times are inflated; compare them with each other.',
+        '',
+        '## Before',
+        describeRun(pair.before),
+        `- Most React render time: ${top(pair.before)}`,
+        '',
+        '## After',
+        describeRun(pair.after),
+        `- Most React render time: ${top(pair.after)}`,
+        '',
+        '## Change',
+        describeComparison(pair.comparison),
+        '',
+        '## Lines that blocked the JS thread',
+        `Before: ${(pair.before.summary.offenders ?? []).length ? '' : 'none'}`,
+        ...lines(pair.before),
+        `After: ${(pair.after.summary.offenders ?? []).length ? '' : 'none'}`,
+        ...lines(pair.after),
+        '',
+        '## What to do',
+        'Explain what changed between these runs and why, using the code on each branch if they differ. If the second run is not clearly better, find what is still costly and propose fixes.',
+      ].join('\n');
+      return json(res, 200, { prompt });
+    }
+
+    if (url.pathname === '/api/prompt' && url.searchParams.has('run')) {
+      const found = runs.get(url.searchParams.get('run'));
+      if (!found?.run.detail) return json(res, 404, { error: 'This run has no saved breakdown (it was recorded by an older Hitch).' });
+      const { run, previous, comparison } = found;
+      const head = [describeRun(run), '', previous ? `Compared with the previous "${run.name}" run (${previous.git?.branch ?? '?'}@${previous.git?.commit ?? '?'}):\n${describeComparison(comparison)}` : 'No earlier run with this name.', ''].join('\n');
+      return json(res, 200, { prompt: `${head}\n${rangePrompt(run.detail)}` });
     }
 
     if (url.pathname === '/api/runs') {
