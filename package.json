@@ -1,6 +1,6 @@
 {
   "name": "hitch",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Live slowdown watcher for React Native dev sessions: JS stalls and hot native threads, pinned to file:line.",
