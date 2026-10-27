@@ -144,3 +144,10 @@ The tools are:
 - **hitch-setup** gets Hitch installed, running, attached to the app and connected over MCP, and works through the troubleshooting table.
 
 To use hitch-reader while working in your app's repo, copy it to `~/.claude/agents/` (or the app repo's `.claude/agents/`). It needs the MCP server added with `--scope user`.
+
+`.claude/skills/` has two workflows for after Hitch has recorded something:
+
+- **hitch-ab-test** checks whether a change helped: one scenario played 3 times before and 3 times after, with only the change different, judged by the numbers that don't swing between plays (mounts, render counts) rather than blocked ms.
+- **hitch-diagnose** turns results into causes in the app's code: separates dev-only noise, reads render reasons, follows the chain to `file:line`, and confirms it with a temporary `HITCH-DEBUG` log before anyone fixes it.
+
+Copy them to `~/.claude/skills/` to use them from your app's repo.
