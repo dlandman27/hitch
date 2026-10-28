@@ -37,7 +37,9 @@ Not the app's problem in production; say so and move on:
 |---|---|---|
 | `new props with equal values (x: equal object, onY: new function)` | Parent passes a fresh copy of the same data, or a new callback | Find who rebuilds it: `useMemo` / `useCallback` with the right deps, read changing values from a ref, return the previous array when contents match |
 | `its parent re-rendered and passed equal props (not memoized)` | Child has no `memo` | `memo` it, if its props are stable |
-| `its parent re-rendered` on a `memo` component | The parent's render reached it anyway: custom comparator returned false, a hook inside subscribes, or a deferred re-render | Check the comparator and the hooks inside |
+| `its parent re-rendered` | The parent passed a new props object; on a `memo` component the custom comparator returned false | Check the comparator |
+| `its own update (no prop, hook or context change the probe could see)` | Not the parent: the props object is the same one. Something inside updated in a way the probe can't read | Look at the component's own subscriptions and effects |
+| `a hook after #300 changed (not checked)` | Not the parent: a very big component (custom hooks count toward its hook list) updated a hook past the ones the probe checks | Treat it as a store or state change inside it; splitting the component makes the cause visible |
 | `props changed (variant: changed, …)` | Real change; often a layout switch as data arrives | Ask whether it could start in its final shape |
 | `a store subscription changed (hook N)` | A selector returned a new value | Narrow the selector, or make it return a stable reference |
 | `a context value changed` ×8 | A provider rebuilt its value object | `useMemo` the provider value, split the context |

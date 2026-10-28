@@ -88,6 +88,53 @@ test('the in-app probe records renders, reasons, mounts and the focused screen',
   assert.equal(rows.Lobby.ms, 4);
 });
 
+// Runs the probe on one re-render of a component and returns its reason.
+const reasonForRerender = (prev, next) => {
+  let onCommit = () => {};
+  const context = { setInterval: () => 0, clearInterval: () => {}, requestAnimationFrame: () => {}, Date };
+  context.globalThis = context;
+  context.__REACT_DEVTOOLS_GLOBAL_HOOK__ = { onCommitFiberRoot: (...args) => onCommit(...args) };
+  vm.createContext(context);
+  vm.runInContext(PROBE_SOURCE, context);
+  const Big = function Big() {};
+  const fiber = { tag: 0, type: Big, flags: 1, alternate: { tag: 0, type: Big, ...prev }, ...next, actualDuration: 1 };
+  const root = { current: { tag: 3, child: fiber, alternate: { child: null }, actualDuration: 1 } };
+  fiber.return = root.current;
+  context.__REACT_DEVTOOLS_GLOBAL_HOOK__.onCommitFiberRoot(1, root);
+  const out = JSON.parse(vm.runInContext('__HITCH__.poll()', context));
+  return Object.keys(out.commits[0].rows.find(([name]) => name === 'Big')[4])[0];
+};
+
+// A hook list of `count` state hooks; `changedAt` gets a different value than the previous render.
+const hookChain = (count, changedAt, changed) => {
+  let head = null;
+  for (let i = count - 1; i >= 0; i--) {
+    head = { memoizedState: i === changedAt && changed ? 'new' : 'same', queue: {}, next: head };
+  }
+  return head;
+};
+
+test('a re-render with the same props object is never blamed on the parent', () => {
+  const props = { value: 1 };
+  // State deep in a big component's hook list (custom hooks easily take one past 60).
+  assert.equal(
+    reasonForRerender({ memoizedProps: props, memoizedState: hookChain(120, 90, false) }, { memoizedProps: props, memoizedState: hookChain(120, 90, true) }),
+    'state #90',
+  );
+  // A change past the hooks the probe checks is reported as unchecked, not as the parent.
+  assert.equal(
+    reasonForRerender({ memoizedProps: props, memoizedState: hookChain(400, 350, false) }, { memoizedProps: props, memoizedState: hookChain(400, 350, true) }),
+    'hooks past #300',
+  );
+  // Nothing visible changed: the component's own update, not its parent.
+  assert.equal(reasonForRerender({ memoizedProps: props, memoizedState: null }, { memoizedProps: props, memoizedState: null }), 'own update');
+});
+
+test('the reasons for unseen causes read plainly', () => {
+  assert.equal(describeReason('hooks past #300'), 'a hook after #300 changed (not checked)');
+  assert.equal(describeReason('own update'), 'its own update (no prop, hook or context change the probe could see)');
+});
+
 test('a long frame gap is spread over the seconds it spans', () => {
   let rafCallback = null;
   let now = 10000;

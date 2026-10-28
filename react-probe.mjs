@@ -12,7 +12,7 @@
 // Runs inside the app (Hermes). Plain ES2015, no imports, never throws into React.
 export const PROBE_SOURCE = String.raw`(function () {
   var g = globalThis;
-  if (g.__HITCH__ && g.__HITCH__.version === 2) { g.__HITCH__.resume(); return 'ok'; }
+  if (g.__HITCH__ && g.__HITCH__.version === 3) { g.__HITCH__.resume(); return 'ok'; }
   // An older probe from an earlier Hitch: take its place.
   if (g.__HITCH__ && g.__HITCH__.stop) { try { g.__HITCH__.stop(); } catch (e) {} }
   var hook = g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
@@ -20,6 +20,9 @@ export const PROBE_SOURCE = String.raw`(function () {
 
   var COMPONENT = { 0: 1, 1: 1, 11: 1, 14: 1, 15: 1 };
   var MAX_COMMITS = 120, MAX_PER_COMMIT = 1500, MAX_DIFFED = 200, MAX_ROWS = 40;
+  // Big components (a screen-level sheet with many custom hooks) run past 100
+  // hooks; checking only the first few blamed their own updates on the parent.
+  var MAX_HOOKS = 300;
   var FRAME_IDLE_MS = 2000;
   var on = true;
   var commits = [];
@@ -73,17 +76,18 @@ export const PROBE_SOURCE = String.raw`(function () {
 
   function reasonOf(f) {
     var prev = f.alternate;
-    var bits = [];
+    var bits = [], hooksCut = false;
     if (f.tag === 1) {
       if (prev.memoizedState !== f.memoizedState) bits.push('state');
     } else {
       var a = prev.memoizedState, b = f.memoizedState, i = 0;
-      while (a && b && i < 60) {
+      while (a && b && i < MAX_HOOKS) {
         if (b.queue && a.memoizedState !== b.memoizedState && !isEffect(b)) {
           bits.push(b.queue.getSnapshot ? 'store #' + i : 'state #' + i);
         }
         a = a.next; b = b.next; i++;
       }
+      hooksCut = !!(a && b);
     }
     var dep = f.dependencies && f.dependencies.firstContext;
     var pdep = prev.dependencies && prev.dependencies.firstContext;
@@ -110,7 +114,10 @@ export const PROBE_SOURCE = String.raw`(function () {
       if (!changed.length) bits.push('parent (equal props)');
       else bits.push((avoidable ? 'props~ ' : 'props ') + changed.join(','));
     }
-    return bits.length ? bits.join(' + ') : 'parent';
+    if (bits.length) return bits.join(' + ');
+    if (pp !== np) return 'parent';
+    // Same props object, so the parent didn't cause it: an update the probe couldn't see.
+    return hooksCut ? 'hooks past #' + MAX_HOOKS : 'own update';
   }
 
   function focusedRoute(f) {
@@ -278,7 +285,7 @@ export const PROBE_SOURCE = String.raw`(function () {
   }
 
   g.__HITCH__ = {
-    version: 2,
+    version: 3,
     poll: function () {
       var out = { screen: screen, commits: commits, screens: screens, frames: [], requests: requests };
       requests = [];
@@ -348,6 +355,8 @@ export function describeReason(reason) {
     .map(part => {
       if (part === 'parent') return 'its parent re-rendered';
       if (part === 'parent (equal props)') return 'its parent re-rendered and passed equal props (not memoized)';
+      if (part === 'own update') return 'its own update (no prop, hook or context change the probe could see)';
+      if (/^hooks past #/.test(part)) return `a hook after #${part.slice(12)} changed (not checked)`;
       const props = part.match(/^props(~?) (.+)$/);
       if (props) {
         const keys = props[2].split(',').map(kv => {
