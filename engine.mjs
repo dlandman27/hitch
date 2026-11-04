@@ -5,19 +5,22 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { fork } from 'node:child_process';
+import { execFile, fork } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { connectInspector, findTarget, originCandidates } from './js-inspector.mjs';
 import { bootedSimulatorNames } from './discovery.mjs';
 import { findSimulatorPid, sampleNative } from './native-sample.mjs';
 import { createObservers } from './observers.mjs';
-import { androidRss, findAndroidApp, startAndroidThreadMonitor } from './android.mjs';
+import { androidRss, androidStartedAt, findAndroidApp, openAndroidUrl, sampleAndroid, startAndroidThreadMonitor } from './android.mjs';
 import { diffHeap, summarizeHeapSnapshot } from './heap.mjs';
 import { hotFunctions, profileSamples, stacksBetween } from './profile.mjs';
 import { PROBE_SOURCE, createScreenTracker, describeReason, jankPeriods, summarizeRenders } from './react-probe.mjs';
 import { createSymbolicator } from './symbolicate.mjs';
 import { startThreadMonitor } from './thread-monitor.mjs';
+
+const run = promisify(execFile);
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const POLL_MS = 50;
@@ -428,7 +431,7 @@ export function startEngine(initial) {
       androidApp = null;
     }
     const onSimulator = (await bootedSimulatorNames()).has(target.deviceName);
-    setStatus({ appId: target.appId, device: target.deviceName, physical: !onSimulator });
+    setStatus({ appId: target.appId, device: androidApp?.model ?? target.deviceName, physical: !onSimulator && !androidApp });
     // Only a simulator app is a local process we can read threads from; the
     // same bundle id on a phone must not pick up the simulator's process.
     if (initial.native && !pid && onSimulator) {
@@ -442,6 +445,7 @@ export function startEngine(initial) {
       if (androidApp) {
         setStatus({ platform: 'android', device: androidApp.model, physical: false });
         startNative(startAndroidThreadMonitor({ serial: androidApp.serial, pid: androidApp.pid }));
+        observers.onAttached(androidApp.pid, () => androidStartedAt(androidApp.serial, androidApp.pid));
       }
     }
     const origins = originCandidates(initial.metro);
@@ -579,9 +583,12 @@ export function startEngine(initial) {
 
   let bursting = null;
   const runBurst = trigger => {
-    if (bursting || !pid) return bursting ?? Promise.resolve();
+    if (bursting || !(pid || androidApp)) return bursting ?? Promise.resolve();
     const firedAt = Date.now();
-    bursting = sampleNative({ pid, seconds: BURST_MS / 1000, intervalMs: 5 })
+    const sampling = androidApp
+      ? sampleAndroid({ serial: androidApp.serial, appId: status.appId, pid: androidApp.pid, seconds: BURST_MS / 1000 })
+      : sampleNative({ pid, seconds: BURST_MS / 1000, intervalMs: 5 });
+    bursting = sampling
         .then(sampled => {
           const threadsOut = sampled
             .filter(t => t.busyMs >= 10)
@@ -589,7 +596,7 @@ export function startEngine(initial) {
             .slice(0, 6)
             .map(t => ({
               label: t.label,
-              busyPct: Math.min(100, Math.round((t.busyMs / BURST_MS) * 100)),
+              busyPct: Math.min(100, Math.round((t.busyMs / (t.windowMs ?? BURST_MS)) * 100)),
               busyMs: Math.round(t.busyMs),
               categories: [...t.categories].sort((a, b) => b[1] - a[1]).map(([name, v]) => ({ name, pct: Math.round((v / t.busyMs) * 100) })),
               frames: [...t.self]
@@ -613,6 +620,7 @@ export function startEngine(initial) {
 
   events.status = () => ({ type: 'status', ...status });
   events.reloadApp = () => inspector?.reloadApp();
+  events.openUrl = url => (androidApp ? openAndroidUrl(androidApp.serial, url) : run('xcrun', ['simctl', 'openurl', 'booted', url], { timeout: 10000 }));
   events.sampleNow = () => runBurst('manual sample');
   events.history = () => ({ ...history, ...observers.history() });
   events.profile = seconds => profileFor(seconds);

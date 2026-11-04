@@ -2,8 +2,7 @@
 // home"), get its numbers, and compare them with the previous run of the same
 // name, e.g. on another branch. Saved in ~/.hitch/runs/<name>/<time>.json.
 
-import { execFile, execFileSync } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,7 +12,6 @@ import { summarizeRange } from './range.mjs';
 
 const RUNS_DIR = path.join(os.homedir(), '.hitch', 'runs');
 const SCENARIOS_DIR = path.join(os.homedir(), '.hitch', 'scenarios');
-const run = promisify(execFile);
 const MAX_WAIT_S = 120;
 // Profiling a run gives its short freezes real stacks; Hermes keeps a profile
 // in memory, so a long run is only profiled for its first minute.
@@ -168,7 +166,7 @@ export function describeRun(run) {
 
 // A scenario is a named list of steps that replays the same way each time:
 //   { reload: true }            reload the app's JS (and wait for it to start)
-//   { open_url: "myapp://x" }   open a deep link in the booted simulator
+//   { open_url: "myapp://x" }   open a deep link in the simulator or Android device
 //   { wait: 5 }                 wait N seconds (time to settle, or for you to scroll)
 export function validateSteps(steps) {
   if (!Array.isArray(steps) || !steps.length) throw new Error('a scenario needs at least one step');
@@ -187,7 +185,7 @@ async function playStep(step, engine) {
     await engine.reloadApp();
     await new Promise(r => setTimeout(r, RELOAD_SETTLE_MS));
   } else if (step.open_url) {
-    await run('xcrun', ['simctl', 'openurl', 'booted', step.open_url], { timeout: 10000 });
+    await engine.openUrl(step.open_url);
   } else if (step.wait) {
     await new Promise(r => setTimeout(r, step.wait * 1000));
   }

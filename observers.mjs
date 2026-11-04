@@ -455,9 +455,9 @@ export function createObservers({ publish, settings, nextId, symbolicate, getPid
       beginStartup('reload', reloadedAt);
     },
     // A process launched moments before we attached is a cold start we can still time.
-    onAttached: async pid => {
+    onAttached: async (pid, startedAt = () => processStartedAt(pid)) => {
       if (startup || !pid) return;
-      const started = await processStartedAt(pid);
+      const started = await startedAt();
       if (started && Date.now() - started < 120000) beginStartup('cold launch', started);
     },
     start: () => {

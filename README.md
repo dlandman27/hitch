@@ -2,9 +2,9 @@
   <img src="ui/brand/readme-banner.png" alt="Hitch — Find out why your React Native app is slow. Live performance insights. No SDK required." width="100%" />
 </p>
 
-Hitch watches your app from the outside while you test it in the simulator. When the app freezes, stutters, re-renders too much, logs an error, waits on a slow request or leaks memory, Hitch catches it, points at the code responsible and explains why it happened. One click turns any of it into a prompt for an AI agent.
+Hitch watches your app from the outside while you test it in the iOS simulator or on Android. When the app freezes, stutters, re-renders too much, logs an error, waits on a slow request or leaks memory, Hitch catches it, points at the code responsible and explains why it happened. One click turns any of it into a prompt for an AI agent.
 
-There's nothing to add to your app: no SDK, no imports, no config. Hitch connects the way React Native DevTools does (through Metro's debugger) and reads thread CPU and memory from your Mac. It's free and open source (MIT), and runs on macOS.
+There's nothing to add to your app: no SDK, no imports, no config. Hitch connects the way React Native DevTools does (through Metro's debugger) and reads thread CPU and memory from your Mac (iOS simulator) or over adb (Android). It's free and open source (MIT), and runs on macOS.
 
 **What it catches**
 
@@ -34,6 +34,7 @@ There's nothing to add to your app: no SDK, no imports, no config. Hitch connect
 - [A tour of the window](#a-tour-of-the-window)
 - [What it tracks and how](#what-it-tracks-and-how)
 - [Handing issues to an AI](#handing-issues-to-an-ai)
+- [Testing on Android](#testing-on-android)
 - [Testing on a real iPhone](#testing-on-a-real-iphone)
 - [Saved sessions](#saved-sessions)
 - [Options](#options)
@@ -49,7 +50,8 @@ There's nothing to add to your app: no SDK, no imports, no config. Hitch connect
 
 - **macOS** with Xcode and its command-line tools.
 - **Node 22** or newer. Hitch has no npm dependencies.
-- A React Native app on **Hermes** (React Native 0.73 or newer), run as a **dev build** through Metro, in the iOS simulator for the full picture. Phones work too, with less detail ([see below](#testing-on-a-real-iphone)).
+- A React Native app on **Hermes** (React Native 0.73 or newer), run as a **dev build** through Metro, in the iOS simulator or on Android (emulator or phone) for the full picture. iPhones work too, with less detail ([see below](#testing-on-a-real-iphone)).
+- **For Android:** `adb` on your PATH (it comes with Android Studio's platform tools) and a debug build of the app.
 
 ## Install
 
@@ -175,13 +177,13 @@ Use `J` and `K` to move through events and `Esc` to go back to the list.
 
 | Signal | Source | Cost to the app |
 |---|---|---|
-| Per-thread CPU (lanes) | `ps -M` on the simulator process, every 50ms | none (read from the Mac) |
+| Per-thread CPU (lanes) | `ps -M` on the simulator process, every 50ms; on Android, `/proc/<pid>/task/*/stat` streamed over one `adb shell`, about every 140ms | none (read from the Mac); on Android about 3% of one core for the reading loop, outside the app |
 | JS freezes and the code responsible | Metro debugger: brief `Debugger.pause` → stack → resume, only while the JS thread is already pegged | none while healthy |
-| Hot-thread breakdown | macOS `sample` for 1s when the UI thread is ≥60% or another thread ≥90% for a second | only during that 1s |
+| Hot-thread breakdown | macOS `sample` for 1s when the UI thread is ≥60% or another thread ≥90% for a second; on Android, the device's `simpleperf` | only during that 1s |
 | Console output (all levels) | Metro debugger `Runtime` events; an object in a warning or error may get one property read to show its contents | none (already produced by the app) |
 | Network requests | Metro debugger `Network` events (XHR) | none |
 | JS heap | `Runtime.getHeapUsage` every 2s (answered off the JS thread) | negligible |
-| App memory and thread count | `ps` on the simulator process every 2s | none |
+| App memory and thread count | `ps` on the simulator process every 2s; on Android, `/proc/<pid>/status` over adb | none |
 | Startup time | debugger reconnect → `Running "app"` log → JS and UI threads quiet for 1s | none |
 | Leaks | memory floor after GC (or thread count) rising steadily for 3 minutes; app memory that a JS reload didn't give back | none |
 | What React rendered, and why | a small probe Hitch installs through the debugger on React's DevTools hook (dev builds already load it): per commit, which components rendered or mounted, their render time, and the reason (state, store, context, changed props, or new props with equal values) | about 1ms per React commit (measured ~3% of React's own render time), nothing while idle |
@@ -242,6 +244,23 @@ The window has **Record** in the toolbar for the same thing by hand. Runs are sa
 It only answers on this Mac: it listens on `127.0.0.1` and refuses requests from web pages. This repo also ships agent definitions in `.claude/agents/`; to use the findings reader from your app's repo, copy `hitch-reader.md` to `~/.claude/agents/`. See [AGENTS.md](AGENTS.md).
 
 ---
+
+## Testing on Android
+
+A debug build on an Android emulator or phone gets the same detail as the iOS simulator: JS freezes with code lines, React diagnosis, console, network, startup, memory, and per-thread native lanes with hot-spot breakdowns. Nothing extra is installed in the app; Hitch reads the threads with `adb`.
+
+1. Have `adb` on your PATH and run the app as usual (`yarn android`, or `npx expo run:android`). It must reach Metro; on a phone over USB, run `adb reverse tcp:8081 tcp:8081`.
+2. Start Hitch. It finds the app on Metro, sees that it isn't in the iOS simulator, and finds its process over adb on whichever connected device runs it.
+3. If the same app is also open in the iOS simulator, pick the Android entry in the app picker.
+
+How it reads Android:
+
+- **Thread lanes:** one long-running `adb shell` loop prints each thread's CPU time from `/proc` about every 140ms. Linux cuts thread names at 15 characters, so some lanes read like `Firebase Backgr`.
+- **Hot spots** (and **Sample**): the device's `simpleperf` records every thread for about a second. That works without root on any debuggable build, Android 9 and up. It takes a few seconds to arrive.
+- **Cold launch:** timed from the process start time in `/proc`, so attaching up to two minutes after launch still counts.
+- **Scenarios:** `open_url` steps run `adb shell am start -d <url>`.
+
+Lane names to know: `Java GC (ART)` is Android's garbage collector for Java and Kotlin objects (Hermes has its own `hades` thread). `Metro connection (dev only)` is the debug build's link to Metro.
 
 ## Testing on a real iPhone
 
@@ -318,7 +337,7 @@ hitch [options]
   --stall <ms>          JS freeze threshold (default 50)
   --ui-hot <pct>        UI-thread % that triggers a native sample (default 60)
   --thread-hot <pct>    any-thread % that triggers a native sample (default 90)
-  --no-native           skip native threads (Android / physical device)
+  --no-native           skip native threads (simulator / Android)
   --no-window           print the URL instead of opening a window
   --open <file>         review a saved session.json
   --quit-with-window    stop (and save the report) once the window has been closed for 15s
@@ -344,10 +363,11 @@ Most thresholds can also be changed live in **••• → Settings**.
 
 ## Limits
 
-- **macOS only.** Android thread lanes (over adb) are included but haven't been tested on a device yet; the debugger-based parts (freezes, console, network, React) work the same.
+- **Hitch runs on macOS.** The app can run in the iOS simulator, on Android, or on an iPhone.
+- **Android emulators draw through the Mac's GPU.** Render work on `RenderThread` and in Rive or Skia shows up as `QemuPipeStream` / `qemu_pipe_write_fully`. That cost belongs to the emulator, so measure rendering on an Android phone.
 - **Dev builds are slower than production.** Absolute times are inflated; the ranking and the culprits are real, and dev-only work is labelled.
 - **Network:** apps whose global `fetch` is Expo's native implementation don't report those requests to the debugger, so RTK Query and plain `fetch` calls won't appear. XHR and axios do.
-- **Native lanes need the simulator.** On a phone, use Option A for JS detail or Option B for native threads.
+- **Native lanes need the simulator or Android.** On an iPhone, use Option A for JS detail or Option B for native threads.
 - **Short freezes:** a freeze shorter than ~100ms sometimes ends before a stack can be captured. It's still listed with its duration.
 - **Production users:** Hitch is for testing. For real users in production, use your RUM tool (e.g. Datadog).
 
@@ -364,6 +384,9 @@ Most thresholds can also be changed live in **••• → Settings**.
 | Code lines look wrong, or a yellow "older JS bundle" banner shows | Press **Reload app** in the banner (or `r` in Metro). |
 | Frames show `[bundle 123:45]` instead of files | Source maps are still loading (first stall after launch), or the project folder is wrong: pass `--project`. |
 | Phone missing from the dropdown | Unlock it and trust this Mac; check that `xcrun devicectl list devices` shows it as `connected`. |
+| Android app never connects to Metro | Run `adb reverse tcp:8081 tcp:8081` (the Metro port), then reload the app. |
+| Android: no thread lanes | Check that `adb devices` lists the device as `device` (not `unauthorized`), and that the app is a debug build. |
+| Android: hot spots say "native sample failed" | `simpleperf` needs a debuggable build on Android 9 or newer. Release builds can't be sampled. |
 | Release build fails with "No signing certificate" | Do the one-time signing setup above. |
 | "Unable to log in with account" during a build | Re-enter your password in Xcode → Settings → Accounts. |
 | Sampling a TestFlight or App Store app fails | Expected: iOS doesn't allow it. Install your own Release build. |
@@ -391,7 +414,7 @@ Most thresholds can also be changed live in **••• → Settings**.
 | `react-probe.mjs` | The in-app React probe (renders, reasons, frames, screens) and its host-side summaries |
 | `profile.mjs` · `heap.mjs` | Hermes sampling profiles as stacks; heap snapshot summaries and diffs |
 | `runs.mjs` | Named runs, scenarios and their comparisons |
-| `android.mjs` | Android thread lanes and memory over adb |
+| `android.mjs` | Android thread lanes, memory, start time, `simpleperf` hot spots and deep links over adb |
 | `mac-app.mjs` / `mac/HitchApp.swift` | `--install-app`: compiles the native `Hitch.app` window and its start script |
 | `ui/` | The window, built on the [Shoelace](https://shoelace.style) design system, with a canvas for the lanes |
 

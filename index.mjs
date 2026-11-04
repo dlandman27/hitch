@@ -22,7 +22,7 @@ const USAGE = `hitch [options]   (run from the app's repo, or pass --project)
   --stall <ms>          JS freeze threshold (default 50)
   --ui-hot <pct>        UI-thread % that triggers a native sample (default 60)
   --thread-hot <pct>    any-thread % that triggers a native sample (default 90)
-  --no-native           skip native threads (Android / physical device)
+  --no-native           skip native threads (simulator / Android)
   --no-window           don't open the UI window (just print its URL)
   --open <session.json> review a saved session (from ~/.hitch/<time>/) without an app
   --quit-with-window    stop (and save the report) once the window has been closed for 15s

@@ -16,19 +16,22 @@ const SPECIFIC = [
   ['Text layout', /TextLayoutManager|RCTTextLayout|CoreText|NSLayoutManager|TextKit/],
   ['Hermes GC', /HadesGC|hermes::vm::GC|markRoots/],
   ['Reanimated / worklets', /reanimated|worklets::/],
-  ['Images', /ImageIO|SDWebImage|SDImage|vImage|ExpoImage|AppleJPEG/],
-  ['Firestore / gRPC', /firebase::firestore|firestore::|grpc|leveldb/],
-  ['Analytics SDKs', /Datadog|DdSdk|RUMMonitor|Amplitude|Segment|Sentry|Crashlytics|Intercom|AppsFlyer/],
-  ['Network', /CFNetwork|NSURLSession|boringssl/],
-  ['React mounting / shadow tree', /ShadowTree|ShadowNode|Differentiator|calculateShadowViewMutations|MountingCoordinator|RCTMounting|ComponentView|UIManager::|LayoutableShadowNode/],
+  ['Rive animations', /^Rive |rive::|app\.rive\./],
+  ['Images', /ImageIO|SDWebImage|SDImage|vImage|ExpoImage|AppleJPEG|com\.facebook\.imagepipeline|com\.bumptech\.glide|coil3?\.|libjpeg|libpng|libwebp/],
+  ['Firestore / gRPC', /firebase::firestore|firestore::|grpc|leveldb|com\.google\.firebase\.firestore|io\.grpc/],
+  ['Analytics SDKs', /Datadog|DdSdk|RUMMonitor|Amplitude|Segment|Sentry|Crashlytics|Intercom|AppsFlyer|com\.(datadog|amplitude|segment|appsflyer|intercom)\.|io\.sentry\.|^datadog-/],
+  ['Network', /CFNetwork|NSURLSession|boringssl|okhttp3\.|okio\.|conscrypt/i],
+  ['React mounting / shadow tree', /ShadowTree|ShadowNode|Differentiator|calculateShadowViewMutations|MountingCoordinator|RCTMounting|ComponentView|UIManager::|LayoutableShadowNode|com\.facebook\.react\.fabric\.|MountItem/],
 ];
 const GENERIC = [
   ['Hermes JS execution', /hermes::|facebook::hermes|jsi::/],
   ['CoreAnimation / render', /QuartzCore|CA::|Metal|IOSurface/],
   ['UIKit', /UIKitCore/],
+  ['Android views / render', /android\.view\.|android\.widget\.|libhwui|android::uirenderer/],
+  ['Java runtime (ART)', /libart\.so|art::/],
 ];
 // Leaf frames that say nothing on their own; report the nearest caller instead.
-export const GENERIC_LEAF = /^(objc_msgSend|objc_retain|objc_release|objc_autorelease\w*|swift_retain|swift_release|swift_\w*[Rr]etain\w*|swift_\w*[Rr]elease\w*|_?_?platform_mem\w+|_?malloc\w*|nanov2_\w+|free|_free|szone_\w+|CFRetain|CFRelease|pthread_\w+|_pthread_\w+|os_unfair_lock\w*|_os_unfair_lock\w*|memcpy|memmove|bzero|std::__1::\w+|operator new|operator delete)\b/;
+export const GENERIC_LEAF = /^(objc_msgSend|objc_retain|objc_release|objc_autorelease\w*|swift_retain|swift_release|swift_\w*[Rr]etain\w*|swift_\w*[Rr]elease\w*|_?_?platform_mem\w+|_?malloc\w*|nanov2_\w+|free|_free|szone_\w+|CFRetain|CFRelease|pthread_\w+|_pthread_\w+|os_unfair_lock\w*|_os_unfair_lock\w*|memcpy|memmove|bzero|std::__1::\w+|operator new|operator delete|memset|__mem(cpy|set|move)\w*|art_quick_\w+|art_jni_trampoline)\b/;
 
 // The Hermes sampler (its own thread + the signal handler it injects into the
 // JS thread) is the tool's footprint, not the app's.

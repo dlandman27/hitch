@@ -191,7 +191,7 @@ const TOOLS = [
   },
   {
     name: 'hitch_run_scenario',
-    description: 'Replay a named scenario as a recorded run and compare it with the last run of that name. Steps: {"reload": true} reloads the JS, {"open_url": "myapp://screen"} opens a deep link in the booted simulator, {"wait": 8} waits (settling, or time for the user to scroll). Steps given are saved under the name; omit them to replay the saved ones. Plays 3 times by default and compares medians. Use the same scenario before and after a change.',
+    description: 'Replay a named scenario as a recorded run and compare it with the last run of that name. Steps: {"reload": true} reloads the JS, {"open_url": "myapp://screen"} opens a deep link in the simulator or Android device, {"wait": 8} waits (settling, or time for the user to scroll). Steps given are saved under the name; omit them to replay the saved ones. Plays 3 times by default and compares medians. Use the same scenario before and after a change.',
     inputSchema: {
       type: 'object',
       properties: {

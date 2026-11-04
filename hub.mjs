@@ -102,6 +102,7 @@ export function startHub(opts) {
   hub.clear = () => engine?.clear();
   hub.sampleNow = () => engine?.sampleNow();
   hub.reloadApp = () => engine?.reloadApp();
+  hub.openUrl = url => (engine?.openUrl ? engine.openUrl(url) : Promise.reject(new Error('deep links need a dev build attached through Metro')));
   hub.writeReport = () => engine?.writeReport();
   // Only the dev-build engine has these; a phone (Release) session doesn't.
   hub.profile = seconds => (engine?.profile ? engine.profile(seconds) : Promise.reject(new Error('profiling needs a dev build attached through Metro')));

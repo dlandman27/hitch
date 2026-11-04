@@ -74,7 +74,7 @@ The tools are:
 | `profile.mjs`, `heap.mjs` | Hermes profiles → stacks and hot functions; heap snapshot summaries and diffs |
 | `runs.mjs` | Runs, scenarios, medians and comparisons, saved under `~/.hitch/runs` and `~/.hitch/scenarios` |
 | `range.mjs` | A slice of the timeline (`summarizeRange`) and its AI brief (`rangePrompt`), served at `/api/range` |
-| `android.mjs` | Android thread CPU and memory via adb (unit-tested; not yet run against a device) |
+| `android.mjs` | Android over adb: streamed thread CPU, memory, process start time, `simpleperf` hot spots, deep links |
 | `mac-app.mjs`, `mac/HitchApp.swift` | Native Hitch.app (WKWebView window); compiled at `--install-app` |
 | `ui/` | `index.html`, `app.js` (one file: state, SSE, canvas lanes, detail panes), `app.css`, `brand/` |
 
@@ -125,6 +125,8 @@ The tools are:
 - **Source maps are placed per module** (`calibrateOffset` / `offsetAt` in `symbolicate.mjs`): a long-running Metro and Hitch's fresh private Metro can order modules differently. Agreement below 95% marks the map as mismatched.
 - **Dev builds vary run to run** (2× is normal). Compare medians of several plays, not single runs.
 - **UI views** live in `ui/app.js` under `viewRenderers`; each re-renders on a 1–2s timer only while shown. The timeline canvas is `draw()`; WebKit pauses `requestAnimationFrame` when the page is hidden, so screenshot it in Chrome or on a visible window.
+- **Android goes through adb, never into the app.** Thread lanes come from one long-lived `adb shell` loop over `/proc/<pid>/task/*/stat`, which costs the device about 3% of a core. Per-poll `adb shell` calls were too slow, because each round trip takes ~85ms. Hot spots use `simpleperf record --app <id> -e cpu-clock --call-graph fp`: emulators have no hardware counters, and DWARF unwinding takes seconds. The recording window is taken from the sample timestamps, not `--duration`, which emulators overrun. Thread names are cut at 15 characters, so match prefixes.
+- **Test Android on the emulator:** boot an AVD, run the app's debug build, then `hitch --no-window --port 7371`. If the iOS simulator has the same app on the same Metro, attach to the Android entry (`POST /api/attach` with its `device` name, or use the picker).
 - **`~/.hitch/` layout:** `<ISO time>/report.md` + `session.json` per session that found something, `handoffs/` (briefs sent to Claude), `runs/` and `scenarios/`, `app.log` (Hitch.app output), `window-profile/` (Chrome `--app` window profile).
 - **The terminal log is chronological per source, not globally.** Console lines carry the app's timestamp, so they can print slightly out of order with stall lines.
 

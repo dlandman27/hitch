@@ -93,7 +93,7 @@ const ROW_INFO = {
   console:
     'Triangles are console.warn, console.error and uncaught exceptions from the app, at the moment they happened, with the line that logged them. Repeats of the same message (even with different ids or numbers in it) are grouped with a count. Faint ticks are plain console.log / info / debug lines; hover one to read it.',
   memory:
-    'Green is the JS heap (memory used by JavaScript objects, from the debugger every 2s). Blue is total app memory (from your Mac, simulator only). Each line is scaled to its own range so slow climbs stand out. Red marks are leak warnings.',
+    'Green is the JS heap (memory used by JavaScript objects, from the debugger every 2s). Blue is total app memory (iOS simulator or Android over adb). Each line is scaled to its own range so slow climbs stand out. Red marks are leak warnings.',
 };
 
 function threadInfo(name) {
@@ -107,7 +107,7 @@ function threadInfo(name) {
 
 const VITAL_INFO = {
   'JS heap': 'Memory used by JavaScript objects in Hermes, read from the debugger every 2 seconds. If it keeps rising after you leave screens, something is being kept alive (a leak).',
-  'App memory': 'Total memory of the app process (resident size), read from your Mac every 2 seconds. Includes native memory such as images and SDKs. Simulator only.',
+  'App memory': 'Total memory of the app process (resident size), read every 2 seconds from the iOS simulator or an Android device over adb. Includes native memory such as images and SDKs.',
   Threads: 'Number of OS threads in the app. It should stay roughly flat; steady growth means something keeps spawning threads without ending them.',
   'Last reload': 'Time from the JS reload until the first screen started rendering, then until the JS and UI threads went quiet.',
   'Cold launch': 'Time from the app process starting until the first screen started rendering, then until the JS and UI threads went quiet.',
@@ -343,8 +343,8 @@ function setStatus(status) {
   empty.hidden = !(status.state === 'live' && !status.native);
   empty.open = !empty.hidden;
   empty.lastChild.textContent = status.physical
-    ? ' Physical device: per-thread lanes need the simulator. The JS lane shows responsiveness, and freezes are captured on the right.'
-    : ' Thread lanes need the app running in the iOS simulator. JS freezes are still captured on the right.';
+    ? ' Physical iPhone: per-thread lanes need the simulator (Android phones work over adb). The JS lane shows responsiveness, and freezes are captured on the right.'
+    : ' Thread lanes need the app in the iOS simulator, or on an Android emulator or device with adb on your PATH. JS freezes are still captured on the right.';
   const phoneNote = $('#phone-note');
   phoneNote.hidden = !status.release;
   phoneNote.open = Boolean(status.release);
