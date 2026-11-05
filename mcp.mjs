@@ -210,6 +210,27 @@ const TOOLS = [
     annotations: READ_ONLY,
   },
   {
+    name: 'hitch_targets',
+    description: 'Every app Hitch can watch: Metro servers with the apps connected to each (simulators, emulators, devices) and physical iPhones, marking the one watched now. Switch with hitch_attach.',
+    inputSchema: { type: 'object', properties: {} },
+    annotations: READ_ONLY,
+  },
+  {
+    name: 'hitch_attach',
+    description: 'Switch Hitch to another app or device, like the target picker in its window. Give a device name (e.g. "iPhone 18 Pro") and/or app id from hitch_targets; metro only when more than one server matches. For a physical iPhone in Release, give phone (udid) and bundle_id. Starts a fresh session.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        device: string('Device name as hitch_targets lists it, e.g. "iPhone 18 Pro" or "sdk gphone16k arm64".'),
+        app: string('App id, e.g. com.alphatalid.'),
+        metro: string('Metro URL, only needed when several servers match.'),
+        phone: string('Physical iPhone udid (Release profiling).'),
+        bundle_id: string('Bundle id on that phone.'),
+      },
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
     name: 'hitch_clear',
     description: 'Forget everything Hitch has recorded so far, so the next hitch_findings shows only what happens after a change.',
     inputSchema: { type: 'object', properties: {} },
@@ -453,6 +474,43 @@ export function createMcp({ engine, findEvent, withContext, root, runs, scenario
       const list = runs.list(name);
       if (!list.length) return text('No saved runs yet. Record one with hitch_run_start / hitch_run_stop.');
       return text(list.slice(-20).map(r => `${r.startedAt}  "${r.name}"  ${r.git?.branch ?? '?'}@${r.git?.commit ?? '?'}  blocked ${r.summary.blockedMs}ms / ${r.summary.stalls} freezes, choppy ${r.summary.jankSeconds}s, ${r.summary.errors} errors`).join('\n'));
+    },
+
+    hitch_targets() {
+      if (!engine.servers) return failure('This is a saved session; there is nothing to switch to.');
+      const { servers, phones, current } = engine.servers();
+      const isCurrent = (server, app) => !current?.phone && current?.metro === server.url && (current.app ?? null) === app.appId && (current.device ?? null) === (app.device ?? null);
+      const lines = servers.flatMap(server => [
+        `Metro ${server.url} · ${server.name}${current?.metro === server.url && !current.app ? '  ← watched (any app)' : ''}`,
+        ...(server.apps.length ? server.apps.map(app => `  ${app.appId} on ${app.device ?? 'unknown device'}${isCurrent(server, app) ? '  ← watched' : ''}`) : ['  (no app connected)']),
+      ]);
+      const phoneLines = phones.flatMap(phone => [
+        `iPhone ${phone.name} · udid ${phone.udid} (Release, profiler)`,
+        ...phone.apps.map(app => `  ${app.bundleId}${current?.phone === phone.udid && current.bundleId === app.bundleId ? '  ← watched' : ''}`),
+      ]);
+      const all = [...lines, ...phoneLines];
+      return text(all.length ? all.join('\n') : 'No Metro servers or phones found. Start Metro and open the app.');
+    },
+
+    async hitch_attach({ device, app, metro, phone, bundle_id: bundleId } = {}) {
+      if (!engine.attachTo) return failure('This is a saved session; there is nothing to switch to.');
+      if (phone) {
+        if (!bundleId) return failure('Give bundle_id with phone.');
+        return engine.attachTo({ phone, bundleId }).then(() => text(`Now watching ${bundleId} on ${phone}.`), error => failure(`Couldn't attach: ${error.message}`));
+      }
+      if (!device && !app && !metro) return failure('Give a device, app or metro from hitch_targets.');
+      const matches = engine
+        .servers()
+        .servers.filter(server => !metro || server.url === metro)
+        .flatMap(server => server.apps.map(entry => ({ server, entry })))
+        .filter(({ entry }) => (!app || entry.appId === app) && (!device || (entry.device ?? '').toLowerCase() === device.toLowerCase()));
+      if (!matches.length) return failure('No connected app matches. Run hitch_targets to see what is connected (the app has to be open with Metro running).');
+      if (matches.length > 1) return failure(`More than one match; narrow it with device, app or metro:\n${matches.map(({ server, entry }) => `  ${entry.appId} on ${entry.device} via ${server.url}`).join('\n')}`);
+      const [{ server, entry }] = matches;
+      return engine.attachTo({ metro: server.url, app: entry.appId, device: entry.device }).then(
+        () => text(`Now watching ${entry.appId} on ${entry.device} via ${server.url}. Findings start fresh.`),
+        error => failure(`Couldn't attach: ${error.message}`),
+      );
     },
 
     hitch_clear() {

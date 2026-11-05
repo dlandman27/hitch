@@ -236,6 +236,7 @@ An agent working in your app's repo can then ask what Hitch saw and check its ow
 | `hitch_run_start` · `hitch_run_stop` | Record a named interaction; stopping saves it and compares it with the last run of that name |
 | `hitch_run_scenario` | Replay saved steps (reload, open a deep link, wait) as a run, 3 times by default, and compare the medians |
 | `hitch_runs` | Saved runs with their branch and commit |
+| `hitch_targets` · `hitch_attach` | See every connected app and device, and switch which one Hitch watches |
 | `hitch_clear` · `hitch_reload_app` | Start fresh and reload the JS, to check whether a change helped |
 | `hitch_save_report` | Write the report to `~/.hitch` now |
 

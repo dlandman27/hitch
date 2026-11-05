@@ -50,6 +50,7 @@ The tools are:
 | `hitch_profile` | Hermes sampling profile for N seconds |
 | `hitch_heap_snapshot`, `hitch_heap_diff` | Labelled heap snapshots and what grew between them |
 | `hitch_run_start`, `hitch_run_stop`, `hitch_run_scenario`, `hitch_runs` | Record and compare runs; replay saved scenarios (medians of several plays) |
+| `hitch_targets`, `hitch_attach` | List Metro servers, connected apps and phones; switch the watched one (same path as the window's picker) |
 | `hitch_clear`, `hitch_reload_app` | The check-a-fix loop: clear, reload, use the app, list findings again |
 | `hitch_save_report` | Writes the report now |
 

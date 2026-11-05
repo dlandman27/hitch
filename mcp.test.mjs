@@ -46,7 +46,7 @@ test('initializes, lists tools and acknowledges notifications', async () => {
   assert.ok(init.json.result.capabilities.tools);
   assert.equal((await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202);
   const names = (await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).json.result.tools.map(t => t.name);
-  assert.deepEqual(names, ['hitch_status', 'hitch_findings', 'hitch_finding', 'hitch_top_offenders', 'hitch_logs', 'hitch_requests', 'hitch_request', 'hitch_renders', 'hitch_profile', 'hitch_heap_snapshot', 'hitch_heap_diff', 'hitch_run_start', 'hitch_run_stop', 'hitch_run_scenario', 'hitch_runs', 'hitch_clear', 'hitch_reload_app', 'hitch_save_report']);
+  assert.deepEqual(names, ['hitch_status', 'hitch_findings', 'hitch_finding', 'hitch_top_offenders', 'hitch_logs', 'hitch_requests', 'hitch_request', 'hitch_renders', 'hitch_profile', 'hitch_heap_snapshot', 'hitch_heap_diff', 'hitch_run_start', 'hitch_run_stop', 'hitch_run_scenario', 'hitch_runs', 'hitch_targets', 'hitch_attach', 'hitch_clear', 'hitch_reload_app', 'hitch_save_report']);
   assert.equal((await rpc({ jsonrpc: '2.0', id: 3, method: 'nope' })).json.error.code, -32601);
 });
 
@@ -99,4 +99,34 @@ test('status, offenders, logs and actions', async () => {
   await tool('hitch_reload_app');
   assert.deepEqual(calls, ['clear', 'reload']);
   assert.match((await tool('hitch_save_report')).content[0].text, /report.md/);
+});
+
+test('lists targets and attaches by device name', async () => {
+  const attached = [];
+  const engine = {
+    status: () => ({ state: 'no-app', settings: { stallMs: 50 } }),
+    history: () => history,
+    servers: () => ({
+      servers: [{ url: 'http://localhost:8081', name: 'taild-mobile', apps: [{ appId: 'com.alphatalid', device: 'iPhone 18 Pro' }, { appId: 'com.alphatalid', device: 'sdk gphone16k arm64' }] }],
+      phones: [],
+      current: { metro: 'http://localhost:8081', app: 'com.alphatalid', device: 'sdk gphone16k arm64' },
+    }),
+    attachTo: async target => attached.push(target),
+  };
+  const serve = createMcp({ engine, findEvent: () => null, withContext: e => e, root: () => '/nowhere' });
+  const tool = async (name, args = {}) => {
+    const res = { writeHead() {}, end(b) { this.body = b; } };
+    await serve({ method: 'POST', headers: {} }, res, async () => ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }));
+    return JSON.parse(res.body).result;
+  };
+
+  const targets = (await tool('hitch_targets')).content[0].text;
+  assert.match(targets, /sdk gphone16k arm64 {2}← watched/);
+  assert.match(targets, /com\.alphatalid on iPhone 18 Pro$/m);
+
+  assert.ok((await tool('hitch_attach', { app: 'com.alphatalid' })).isError, 'ambiguous without a device');
+  assert.ok((await tool('hitch_attach', { device: 'Pixel 9' })).isError);
+  const done = await tool('hitch_attach', { device: 'iphone 18 pro' });
+  assert.ok(!done.isError);
+  assert.deepEqual(attached, [{ metro: 'http://localhost:8081', app: 'com.alphatalid', device: 'iPhone 18 Pro' }]);
 });
